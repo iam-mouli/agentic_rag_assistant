@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.middleware.rate_limiter import RateLimiterMiddleware
 from app.middleware.tenant_resolver import TenantResolverMiddleware
@@ -62,3 +63,8 @@ app.include_router(health.router)
 app.include_router(query.router)
 app.include_router(tenants.router)
 app.include_router(docs.router)
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

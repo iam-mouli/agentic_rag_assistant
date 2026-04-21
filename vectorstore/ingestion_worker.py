@@ -8,6 +8,7 @@ from config.constants import (
 from config.settings import settings
 from guardrails.indirect_injection import classify_chunk
 from observability.logging.structured_logger import get_logger
+from observability.prometheus.metrics import doc_count_gauge, ingestion_total
 from vectorstore.embedder import embed_texts
 from vectorstore.loader import load_and_chunk
 from vectorstore.registry import update_doc
@@ -79,6 +80,14 @@ def _ingest_sync(tenant_id: str, doc_id: str, file_path: str) -> None:
             pages=pages,
         )
 
+        try:
+            ingestion_total.labels(tenant_id=tenant_id, status="success").inc()
+            if quarantine_count:
+                ingestion_total.labels(tenant_id=tenant_id, status="quarantined").inc()
+            doc_count_gauge.labels(tenant_id=tenant_id).inc()
+        except Exception as exc:
+            logger.warning("metrics_emit_failed", error=str(exc))
+
     except Exception as exc:
         update_doc(tenant_id, doc_id, status="failed", error_message=str(exc))
         logger.error(
@@ -87,6 +96,10 @@ def _ingest_sync(tenant_id: str, doc_id: str, file_path: str) -> None:
             doc_id=doc_id,
             error=str(exc),
         )
+        try:
+            ingestion_total.labels(tenant_id=tenant_id, status="failed").inc()
+        except Exception as metric_exc:
+            logger.warning("metrics_emit_failed", error=str(metric_exc))
         raise
 
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from config.settings import settings
+from observability import semantic_cache
 from vectorstore.loader import compute_file_hash
 from vectorstore.registry import (
     get_doc,
@@ -67,6 +68,7 @@ async def upload_doc(tenant_id: str, request: Request, file: UploadFile = File(.
 
     insert_doc(tenant_id, doc_id, file.filename, file_hash, str(final_path))
     await _enqueue_or_ingest(request, tenant_id, doc_id, str(final_path))
+    await semantic_cache.invalidate_tenant(tenant_id, getattr(request.app.state, "redis", None))
 
     return {"doc_id": doc_id, "filename": file.filename, "status": "processing"}
 
@@ -94,7 +96,7 @@ async def get_doc_route(tenant_id: str, doc_id: str):
 
 
 @router.delete("/{tenant_id}/docs/{doc_id}")
-async def delete_doc(tenant_id: str, doc_id: str):
+async def delete_doc(tenant_id: str, doc_id: str, request: Request):
     init_registry(tenant_id)
     doc = get_doc(tenant_id, doc_id)
     if not doc:
@@ -104,6 +106,7 @@ async def delete_doc(tenant_id: str, doc_id: str):
 
     chunks_removed = remove_doc_chunks(tenant_id, doc_id)
     update_doc(tenant_id, doc_id, status="removed")
+    await semantic_cache.invalidate_tenant(tenant_id, getattr(request.app.state, "redis", None))
 
     return {"doc_id": doc_id, "status": "removed", "chunks_removed": chunks_removed}
 
@@ -145,6 +148,7 @@ async def update_doc_route(tenant_id: str, doc_id: str, request: Request, file: 
 
     insert_doc(tenant_id, new_doc_id, file.filename, file_hash, str(final_path), version=new_version)
     await _enqueue_or_ingest(request, tenant_id, new_doc_id, str(final_path))
+    await semantic_cache.invalidate_tenant(tenant_id, getattr(request.app.state, "redis", None))
 
     return {
         "old_doc_id": doc_id,

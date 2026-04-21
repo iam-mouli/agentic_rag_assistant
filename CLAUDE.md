@@ -142,7 +142,7 @@ All settings go through `config/settings.py` (Pydantic `BaseSettings`). All nume
 | 4 | **Completed** | Per-tenant doc management + async arq ingestion |
 | 5 | **Completed** | Guardrails — input + output + indirect injection defense |
 | 6 | **Completed** | Tracing + structured logs (LangSmith, structlog) |
-| 7 | Pending | Metrics + dashboards + semantic cache |
+| 7 | **Completed** | Metrics + dashboards + semantic cache |
 | 8 | Pending | Full test suite + security tests |
 
 Do not skip ahead — each phase depends on the previous. The design doc is the source of truth for implementation details.
@@ -275,15 +275,37 @@ Do not skip ahead — each phase depends on the previous. The design doc is the 
 
 ---
 
-### Phase 7 — Metrics + Dashboards + Semantic Cache (Next)
+### Phase 7 — Metrics + Dashboards + Semantic Cache
+**Commit:** `Phase 7 complete: metrics + dashboards + semantic cache`
+
+**What was built:**
+- `observability/prometheus/metrics.py` — 6 Prometheus instruments: `rag_query_total` (Counter, labels: tenant_id, route_decision, cache_hit), `rag_query_latency_seconds` (Histogram, labels: tenant_id, node), `rag_hallucination_score` (Histogram, labels: tenant_id), `rag_guardrail_blocks_total` (Counter, labels: tenant_id, block_code, phase), `rag_ingestion_total` (Counter, labels: tenant_id, status), `rag_active_tenants` / `rag_doc_count` (Gauges)
+- `observability/semantic_cache.py` — Redis-backed semantic similarity cache; `get()` embeds the incoming query and cosine-compares against all stored embeddings for the tenant; `set()` stores embedding + serialised response under a tenant-scoped index key; `invalidate_tenant()` bulk-deletes all cache keys for a tenant
+- `app/routes/query.py` — cache check placed **before** input guardrails; on hit: emits `cache_hit="true"` metrics, sets `cache: True` in response body, returns early; on miss: runs full graph + guardrails, emits `cache_hit="false"` + hallucination histogram, populates cache after response is built; guardrail blocks emit `guardrail_blocks_total`; all metric calls wrapped in `try/except`
+- `app/routes/docs.py` — `invalidate_tenant()` called after upload, delete, and replace (PUT) so stale cache entries never serve outdated answers
+- `vectorstore/ingestion_worker.py` — `ingestion_total` incremented for `success`, `quarantined` (if any chunks were quarantined), and `failed`; `doc_count_gauge` incremented on success
+- `docker/grafana/dashboard_platform.json` — platform-wide dashboard: Queries/min by Tenant (timeseries), Cache Hit Rate % (gauge), Guardrail Block Rate by block_code (timeseries), Hallucination Score Distribution (histogram), Ingestion Rate by Status (timeseries), P95 Query Latency (timeseries)
+- `docker/grafana/dashboard_tenant.json` — per-tenant drilldown with `$tenant_id` template variable (populated from `label_values(rag_query_total, tenant_id)`); same panels scoped to the selected tenant plus Doc Inventory Count (stat) and Node Latency Breakdown P50/P95
+
+**Non-obvious decisions:**
+- Cache check is the **first** thing in the query handler (before even input guardrails). A cache hit means the original query already passed all guardrails — re-running them on an identical semantically-equivalent query is waste.
+- Semantic cache is **fail-open** throughout: `get()`, `set()`, and `invalidate_tenant()` all catch every exception and log a warning rather than propagating. Redis unavailability must never kill a query.
+- `invalidate_tenant()` is called on upload/delete/replace even when the operation succeeds. The tenant's full document set has changed, so all cached answers are potentially stale — selective invalidation would require knowing which cached answers used which documents.
+- `cache_hit` label is a string (`"true"` / `"false"`) not a boolean. Prometheus label values are always strings; using Python booleans would produce the label value `True` which is inconsistent with PromQL conventions.
+- All metric emissions are wrapped in `try/except` — a Prometheus client error (e.g., label cardinality explosion) must not kill a live request or ingestion job.
+- Grafana dashboards use datasource `"Prometheus"` (capital P) — case-sensitive match to the provisioned datasource name. Using lowercase would silently break all panels.
+- Both dashboards use `schemaVersion: 38` (Grafana 10 format). The `__inputs` / `__requires` blocks make them importable via the Grafana UI without manual datasource selection.
+
+---
+
+### Phase 8 — Full Test Suite + Security Tests (Next)
 
 **What to build:**
-- `observability/metrics.py` — Prometheus counters/histograms: `query_total`, `query_latency_seconds`, `hallucination_score`, `guardrail_blocks_total`, `ingestion_total`
-- `GET /metrics` — expose Prometheus scrape endpoint via `prometheus_fastapi_instrumentator` or manual registry
-- Grafana dashboard config (JSON) for the core metrics
-- Semantic cache: Redis vector similarity lookup before graph execution; populate on cache miss; TTL = `SEMANTIC_CACHE_TTL_SECONDS`; add `cache: bool` to `QueryResponse` (field already exists in schema)
+- `tests/unit/` — unit tests for all graph nodes, guardrails, vectorstore, tenant auth, semantic cache, metrics
+- `tests/integration/` — full graph integration tests (real LLM optional, mock acceptable), API endpoint tests with TestClient
+- `tests/eval/run_evals.py` — LangSmith evals (CI-gated)
+- Security tests: prompt injection, PII leakage, cross-tenant isolation, rate limit enforcement, key rotation
 
-**Key constraints from design doc:**
-- Semantic cache similarity threshold lives in `config/constants.py` (`SEMANTIC_CACHE_SIMILARITY_THRESHOLD = 0.95`) — do not hardcode
-- Cache hit must short-circuit the full graph + guardrails pipeline and return immediately
-- `cache: True` must be reflected in `QueryResponse` so clients can distinguish cached vs. live answers
+**Key constraints:**
+- Do not mock the database in integration tests (lessons from prior incidents)
+- LangSmith evals are CI-gated — they should fail the build if hallucination rate exceeds threshold
