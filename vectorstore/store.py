@@ -72,7 +72,7 @@ def search(tenant_id: str, query_embedding: list[float], k: int = 5) -> list[dic
     for dist, idx in zip(distances[0], indices[0]):
         if idx < 0:
             continue
-        entry = {k: v for k, v in metadata[idx].items() if k != "embedding"}
+        entry = {key: val for key, val in metadata[idx].items() if key != "embedding"}
         entry["score"] = float(dist)
         results.append(entry)
 

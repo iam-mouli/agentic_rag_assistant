@@ -6,26 +6,26 @@ from graph.builder import rag_graph
 
 router = APIRouter(tags=["query"])
 
-_INITIAL_STATE_DEFAULTS = {
-    "rewritten_query": "",
-    "documents": [],
-    "generation": "",
-    "rewrite_count": 0,
-    "hallucination_score": 0.0,
-    "answer_score": 0.0,
-    "route_decision": "retrieve",
-    "citations": [],
-    "fallback": False,
-}
+
+def _build_initial_state(query: str, tenant_id: str) -> dict:
+    return {
+        "query": query,
+        "tenant_id": tenant_id,
+        "rewritten_query": "",
+        "documents": [],
+        "generation": "",
+        "rewrite_count": 0,
+        "hallucination_score": 0.0,
+        "answer_score": 0.0,
+        "route_decision": "retrieve",
+        "citations": [],
+        "fallback": False,
+    }
 
 
 @router.post("/{tenant_id}/query", response_model=QueryResponse)
 async def query(tenant_id: str, request: QueryRequest) -> QueryResponse:
-    initial_state = {
-        **_INITIAL_STATE_DEFAULTS,
-        "query": request.query,
-        "tenant_id": tenant_id,
-    }
+    initial_state = _build_initial_state(request.query, tenant_id)
 
     try:
         result = await rag_graph.ainvoke(initial_state)

@@ -22,4 +22,6 @@ def generator_node(state: GraphState) -> dict:
         if doc.metadata.get("doc_id")
     ]
 
-    return {"generation": response, "citations": citations}
+    # Direct answers bypass graders — set answer_score so confidence is not 0.0 in the response
+    extra = {"answer_score": 1.0} if is_direct else {}
+    return {"generation": response, "citations": citations, **extra}
