@@ -13,6 +13,7 @@ class Citation(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     confidence: float
+    confidence_level: str = "low"  # "high" | "medium" | "low"
     fallback: bool
     citations: List[Citation]
     cache: bool = False  # True when served from semantic cache (Phase 7)

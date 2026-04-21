@@ -1,3 +1,5 @@
+import logging
+
 from arq.connections import RedisSettings
 
 from config.constants import (
@@ -6,10 +8,13 @@ from config.constants import (
     INGESTION_MAX_RETRIES,
 )
 from config.settings import settings
+from guardrails.indirect_injection import classify_chunk
 from vectorstore.embedder import embed_texts
 from vectorstore.loader import load_and_chunk
 from vectorstore.registry import update_doc
 from vectorstore.store import add_chunks
+
+logger = logging.getLogger(__name__)
 
 
 async def index_document(ctx: dict, tenant_id: str, doc_id: str, file_path: str) -> None:
@@ -36,15 +41,35 @@ def _ingest_sync(tenant_id: str, doc_id: str, file_path: str) -> None:
     try:
         chunks = load_and_chunk(file_path, doc_id, tenant_id)
 
+        safe_chunks = []
+        for chunk in chunks:
+            if classify_chunk(chunk.page_content):
+                safe_chunks.append(chunk)
+            else:
+                logger.warning(
+                    "indirect_injection_quarantine",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "doc_id": doc_id,
+                        "chunk_index": chunk.metadata.get("chunk_index"),
+                    },
+                )
+
         all_embeddings: list[list[float]] = []
-        for i in range(0, len(chunks), INGESTION_CHUNK_BATCH_SIZE):
-            batch = chunks[i : i + INGESTION_CHUNK_BATCH_SIZE]
+        for i in range(0, len(safe_chunks), INGESTION_CHUNK_BATCH_SIZE):
+            batch = safe_chunks[i : i + INGESTION_CHUNK_BATCH_SIZE]
             all_embeddings.extend(embed_texts([c.page_content for c in batch]))
 
-        add_chunks(tenant_id, chunks, all_embeddings)
+        add_chunks(tenant_id, safe_chunks, all_embeddings)
 
-        pages = max((c.metadata.get("page") or 0 for c in chunks), default=0)
-        update_doc(tenant_id, doc_id, status="active", chunk_count=len(chunks), pages=pages)
+        pages = max((c.metadata.get("page") or 0 for c in safe_chunks), default=0)
+        update_doc(
+            tenant_id,
+            doc_id,
+            status="active",
+            chunk_count=len(safe_chunks),
+            pages=pages,
+        )
 
     except Exception as exc:
         update_doc(tenant_id, doc_id, status="failed", error_message=str(exc))

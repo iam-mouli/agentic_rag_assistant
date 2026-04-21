@@ -86,12 +86,14 @@ CHUNK_SIZE = 1000
 SEMANTIC_CACHE_TTL = 3600
 ```
 
-### Guardrails (`guardrails/`) — Phase 5, not yet built
+### Guardrails (`guardrails/`)
 
 Two-phase, decoupled from graph — update independently:
 - **Input:** topic_checker, pii_filter, injection_detector, length_validator
 - **Output:** hallucination_gate (≥0.75), citation_enforcer, toxicity_filter, confidence_tagger
 - **Injection defense:** chunk-time classifier quarantines flagged content; generator prompt hardened with XML wrapping
+- All guardrails use `GuardrailResult(passed, block_code, reason)`. Input pipeline short-circuits on first failure (HTTP 422). Output pipeline does the same.
+- `confidence_level: str` (`"high"` / `"medium"` / `"low"`) is included in every `QueryResponse`.
 
 ### Document Ingestion (`vectorstore/`)
 
@@ -138,7 +140,7 @@ All settings go through `config/settings.py` (Pydantic `BaseSettings`). All nume
 | 2 | **Completed** | Query REST API wired to graph |
 | 3 | **Completed** | Multi-tenant foundation — auth, registry, middleware, rate limiting |
 | 4 | **Completed** | Per-tenant doc management + async arq ingestion |
-| 5 | Pending | Guardrails — input + output + indirect injection defense |
+| 5 | **Completed** | Guardrails — input + output + indirect injection defense |
 | 6 | Pending | Tracing + structured logs (LangSmith, structlog) |
 | 7 | Pending | Metrics + dashboards + semantic cache |
 | 8 | Pending | Full test suite + security tests |
@@ -222,17 +224,48 @@ Do not skip ahead — each phase depends on the previous. The design doc is the 
 
 ---
 
-### Phase 5 — Guardrails (Next)
+### Phase 5 — Guardrails
+**Commit:** *(see git log)*
+
+**What was built:**
+- `guardrails/models.py` — `GuardrailResult(passed, block_code, reason)` dataclass shared by all validators
+- `guardrails/input/length_validator.py` — enforces `MIN_QUERY_LENGTH` / `MAX_QUERY_LENGTH` from constants
+- `guardrails/input/injection_detector.py` — regex for 11 prompt-injection patterns (ignore instructions, jailbreak, role-hijack, `[system]` tags, DAN)
+- `guardrails/input/pii_filter.py` — regex for SSN, credit card, email, US phone, passport
+- `guardrails/input/topic_checker.py` — permissive keyword block; only rejects queries clearly outside enterprise/tech (recipes, horoscopes, gambling, etc.)
+- `guardrails/input/__init__.py` — `run_input_guardrails(query)` pipeline (cheapest → most expensive; short-circuits on first failure)
+- `guardrails/output/hallucination_gate.py` — blocks if `hallucination_score < HALLUCINATION_THRESHOLD`; skips for fallback answers
+- `guardrails/output/citation_enforcer.py` — blocks RAG responses with no citations; skips `direct_answer` path and fallback
+- `guardrails/output/toxicity_filter.py` — regex for profanity/slurs/hate speech in generated text
+- `guardrails/output/confidence_tagger.py` — `tag_confidence(score) → "high"|"medium"|"low"` (≥0.85 / ≥0.70 / below); gate always passes
+- `guardrails/output/__init__.py` — `run_output_guardrails(result)` pipeline
+- `guardrails/indirect_injection/chunk_classifier.py` — `classify_chunk(text) → bool`; quarantines chunks containing injection patterns or data-exfiltration markdown links
+- `app/routes/query.py` — input guardrails before `rag_graph.ainvoke`; output guardrails after; both raise HTTP 422 `{code, reason}` on failure; `confidence_level` added to response
+- `app/schemas/response.py` — added `confidence_level: str` field to `QueryResponse`
+- `vectorstore/ingestion_worker.py` — filters each chunk through `classify_chunk` before embedding; quarantined chunks are logged (`indirect_injection_quarantine`) and excluded from FAISS; `chunk_count` reflects only safe chunks
+
+**Non-obvious decisions:**
+- Input pipeline order: length → injection → PII → topic. Cheapest checks first to minimise unnecessary regex work. Short-circuits on first failure — the first blocked check's `block_code` is returned.
+- `topic_checker` is **permissive by design**: it only blocks queries that are unambiguously unrelated to enterprise tech. False-negative (off-topic query passes) is far less harmful than false-positive (legitimate enterprise query blocked).
+- `hallucination_gate` skips when `result["fallback"] is True`. Fallback answers are intentionally not document-grounded; applying the hallucination gate to them would always block them.
+- `citation_enforcer` checks `route_decision == "direct_answer"` OR `fallback == True` to skip. Both legitimate paths produce citations-free answers.
+- `classify_chunk` returning `False` does **not** fail the ingestion job — it logs and skips the chunk. Quarantining a few adversarial chunks should not prevent an entire doc from being indexed.
+- `confidence_level` thresholds: high ≥ 0.85, medium ≥ `ANSWER_SCORE_THRESHOLD` (0.70), low otherwise. These differ from `ANSWER_SCORE_THRESHOLD` intentionally — the score threshold gates the *graph's* self-correction loop, while the confidence label is a *client-facing* signal.
+
+---
+
+### Phase 6 — Tracing + Structured Logs (Next)
 
 **What to build:**
-- `guardrails/input/` — topic_checker, pii_filter, injection_detector, length_validator
-- `guardrails/output/` — hallucination_gate, citation_enforcer, toxicity_filter, confidence_tagger
-- `guardrails/indirect_injection/` — chunk-time classifier that quarantines flagged content before it enters the FAISS index
-- Wire input guardrails into `app/routes/query.py` **before** graph invoke
-- Wire output guardrails into `app/routes/query.py` **after** graph invoke
-- Generator prompt is already XML-wrapped for injection defense (see `prompts/generator.py`)
+- `tracing/langsmith.py` — LangSmith run tracking; annotate graph invocations with tenant context
+- `tracing/middleware.py` or decorator — attach `run_id` to request context for correlation
+- Replace all `print()` / bare `logging` calls with `structlog` JSON logger
+- Add `request_id`, `tenant_id`, `latency_ms`, `token_usage` to every structured log entry
+- Log guardrail blocks (input + output) with `block_code` and sanitised query excerpt
+- Log ingestion events: `doc_ingested`, `chunk_quarantined`, `ingestion_failed`
+- Propagate LangSmith `run_id` back in the API response header (`X-Run-ID`) for debugging
 
 **Key constraints from design doc:**
-- Guardrails are **decoupled from the graph** — they wrap the graph call at the route layer, not inside nodes
-- NeMo Guardrails handles the Rails config; custom validators supplement it
-- Injection detector runs at **chunk ingestion time** (`vectorstore/ingestion_worker.py → _ingest_sync`) to quarantine adversarial content before it pollutes the index
+- Use `structlog` with JSON renderer for all server-side logging (compatible with log aggregators)
+- LangSmith tracing is opt-in via `LANGSMITH_API_KEY` env var; absence should not break the app
+- Guardrail block events are security-relevant — ensure they are always logged regardless of LangSmith availability
