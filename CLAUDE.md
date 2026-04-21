@@ -141,7 +141,7 @@ All settings go through `config/settings.py` (Pydantic `BaseSettings`). All nume
 | 3 | **Completed** | Multi-tenant foundation — auth, registry, middleware, rate limiting |
 | 4 | **Completed** | Per-tenant doc management + async arq ingestion |
 | 5 | **Completed** | Guardrails — input + output + indirect injection defense |
-| 6 | Pending | Tracing + structured logs (LangSmith, structlog) |
+| 6 | **Completed** | Tracing + structured logs (LangSmith, structlog) |
 | 7 | Pending | Metrics + dashboards + semantic cache |
 | 8 | Pending | Full test suite + security tests |
 
@@ -254,18 +254,36 @@ Do not skip ahead — each phase depends on the previous. The design doc is the 
 
 ---
 
-### Phase 6 — Tracing + Structured Logs (Next)
+### Phase 6 — Tracing + Structured Logs
+**Commit:** `83b5f44`
+
+**What was built:**
+- `observability/logging/structured_logger.py` — `configure_logging()` sets up structlog JSON renderer with `merge_contextvars`, ISO timestamps, exc_info formatting; `get_logger(name)` factory used by all modules
+- `observability/langsmith/tracer.py` — `trace_graph_run(tenant_id, query)` async context manager: opens a LangSmith run on entry, annotates it with `tenant_id`, `route_decision`, `rewrite_count`, `hallucination_score`, `answer_score`, `fallback` on exit; `populate_carrier(carrier, result)` copies graph output into the carrier; `get_run_id(carrier)` returns the UUID for the response header
+- `observability/graph_tracing.py` — `traced_node(name, fn)` wraps any node callable to emit `graph_node_enter` / `graph_node_exit` / `graph_node_error` with `latency_ms`
+- `graph/builder.py` — all `add_node()` calls wrapped with `traced_node()`
+- `app/main.py` — `configure_logging()` called at module load; `get_logger()` replaces any bare logging
+- `app/routes/query.py` — binds `request_id` + `tenant_id` as structlog context vars per request; logs `guardrail_input_block` and `guardrail_output_block` (with `block_code` + `query_excerpt[:80]`) + `query_completed` with full graph metrics; returns `X-Run-ID` header
+- `vectorstore/ingestion_worker.py` — stdlib `logger = logging.getLogger()` replaced with `get_logger()`; emits `doc_ingested` (chunk_count, quarantined_count, pages), `chunk_quarantined` (chunk_index), `ingestion_failed` (error) events
+
+**Non-obvious decisions:**
+- LangSmith is **fully opt-in**: `trace_graph_run` is a no-op context manager when `LANGSMITH_API_KEY` is absent or `langsmith` is not installed. Call-sites need no conditional logic — the carrier dict is always yielded.
+- Guardrail block logs in `query.py` are emitted **before** raising `HTTPException` — they always fire even if the exception path short-circuits LangSmith. This satisfies the security-relevance requirement.
+- `structlog.contextvars.bind_contextvars(request_id=..., tenant_id=...)` is called at the top of each query handler after `clear_contextvars()`. All subsequent log calls within that request (including deep inside nodes) automatically inherit those fields without being passed explicitly.
+- `traced_node` is a plain synchronous wrapper. LangGraph's thread-pool executor handles sync node dispatch — the wrapper does not need to be async.
+- `X-Run-ID` header is only set when LangSmith is enabled (i.e., `run_id` is non-None). When tracing is disabled the header is simply absent — no sentinel value is emitted.
+
+---
+
+### Phase 7 — Metrics + Dashboards + Semantic Cache (Next)
 
 **What to build:**
-- `tracing/langsmith.py` — LangSmith run tracking; annotate graph invocations with tenant context
-- `tracing/middleware.py` or decorator — attach `run_id` to request context for correlation
-- Replace all `print()` / bare `logging` calls with `structlog` JSON logger
-- Add `request_id`, `tenant_id`, `latency_ms`, `token_usage` to every structured log entry
-- Log guardrail blocks (input + output) with `block_code` and sanitised query excerpt
-- Log ingestion events: `doc_ingested`, `chunk_quarantined`, `ingestion_failed`
-- Propagate LangSmith `run_id` back in the API response header (`X-Run-ID`) for debugging
+- `observability/metrics.py` — Prometheus counters/histograms: `query_total`, `query_latency_seconds`, `hallucination_score`, `guardrail_blocks_total`, `ingestion_total`
+- `GET /metrics` — expose Prometheus scrape endpoint via `prometheus_fastapi_instrumentator` or manual registry
+- Grafana dashboard config (JSON) for the core metrics
+- Semantic cache: Redis vector similarity lookup before graph execution; populate on cache miss; TTL = `SEMANTIC_CACHE_TTL_SECONDS`; add `cache: bool` to `QueryResponse` (field already exists in schema)
 
 **Key constraints from design doc:**
-- Use `structlog` with JSON renderer for all server-side logging (compatible with log aggregators)
-- LangSmith tracing is opt-in via `LANGSMITH_API_KEY` env var; absence should not break the app
-- Guardrail block events are security-relevant — ensure they are always logged regardless of LangSmith availability
+- Semantic cache similarity threshold lives in `config/constants.py` (`SEMANTIC_CACHE_SIMILARITY_THRESHOLD = 0.95`) — do not hardcode
+- Cache hit must short-circuit the full graph + guardrails pipeline and return immediately
+- `cache: True` must be reflected in `QueryResponse` so clients can distinguish cached vs. live answers
