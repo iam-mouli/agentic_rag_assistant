@@ -1,9 +1,9 @@
-# dell-rag-platform — System Design Document
+# agentic-rag-platform — System Design Document
 
-**Version:** 1.1  
+**Version:** 1.2  
 **Author:** Chandiramouli Ravisankar  
 **Date:** April 2026  
-**Status:** Architecture Approved | Review Amendments Applied | Awaiting Phase-by-Phase Coding Approval
+**Status:** Architecture Approved | Phase 1 Completed | Phase 2 Awaiting Approval
 
 ---
 
@@ -32,9 +32,9 @@
 
 ## 1. Project Overview
 
-### 1.1 What Is dell-rag-platform?
+### 1.1 What Is agentic-rag-platform?
 
-`dell-rag-platform` is a **multi-tenant, self-serve Enterprise Knowledge Base Platform** that enables any product team at Dell Technologies to onboard their documentation and get an intelligent, self-correcting AI knowledge assistant — with zero platform-team dependency.
+`agentic-rag-platform` is a **multi-tenant, self-serve Enterprise Knowledge Base Platform** that enables any product team to onboard their documentation and get an intelligent, self-correcting AI knowledge assistant — with zero platform-team dependency.
 
 ### 1.2 Problem Statement
 
@@ -65,12 +65,12 @@ An **Agentic RAG platform** built on LangGraph with:
 
 ### 1.4 Origin
 
-First deployed as the OME (OpenManage Enterprise) knowledge assistant at Dell Technologies:
+First deployed as the OME (OpenManage Enterprise) knowledge assistant:
 - **80% reduction** in new-engineer onboarding queries
 - **Adopted by 7 teams** across the organization
 - **500+ documents** indexed and queryable
 
-Platform is now being architected to scale this across all Dell product lines.
+Platform is now being architected to scale this across all product lines.
 
 ---
 
@@ -130,8 +130,8 @@ Platform is now being architected to scale this across all Dell product lines.
 | Layer | Technology | Purpose |
 |---|---|---|
 | Agent Framework | LangGraph | Stateful multi-node graph execution |
-| Generation LLM | OpenAI `gpt-4o` (alt: `claude-sonnet-4-6`) | Answer generation |
-| Grader LLM | OpenAI `gpt-4o-mini` | Router, doc_grader, query_rewriter, hallucination_grader, answer_grader — ~5× cheaper on the 4–5 grader calls per query |
+| Generation LLM | OpenAI `gpt-4o` / Anthropic `claude-sonnet-4-6` / Gemini `gemini-2.0-flash` — selected via `LLM_PROVIDER` | Answer generation |
+| Grader LLM | OpenAI `gpt-4o-mini` / Anthropic `claude-haiku-4-5-20251001` / Gemini `gemini-2.0-flash-lite` — selected via `LLM_PROVIDER` | Router + all 4 grader nodes — ~5× cheaper than generation model |
 | RAG Framework | LangChain | Document loading, prompt chaining |
 | Vector Store | FAISS | Per-tenant similarity search |
 | Embeddings | OpenAI `text-embedding-3-small` (default; `3-large` for high-accuracy tenants) | Chunk + query vectorization |
@@ -214,7 +214,7 @@ The following components are shared across all tenants (built once, used by all)
 ### 5.3 Tenant Registration Flow
 
 ```
-POST /tenants/register { "tenant_name": "idrac", "team_email": "idrac@dell.com" }
+POST /tenants/register { "tenant_name": "idrac", "team_email": "idrac@example.com" }
         ↓
 1. Generate unique tenant_id (UUID)
 2. Generate secure API key (secrets.token_hex)
@@ -856,7 +856,7 @@ User: POST /idrac/query { "query": "How to reset BIOS?" }
 ## 12. Project Structure
 
 ```
-dell-rag-platform/
+agentic-rag-platform/
 │
 ├── app/                                         # FastAPI Application Layer
 │   ├── main.py                                  # App entrypoint, router registration,
@@ -945,7 +945,7 @@ dell-rag-platform/
 │   └── tenants.db                               # Master tenant registry
 │
 ├── llm/
-│   └── openai_client.py                         # gpt-4o + gpt-4o-mini client with retry + token tracking
+│   └── client.py                                # Provider-agnostic LLM client (OpenAI / Anthropic / Gemini) — lazy-init factory
 │
 ├── prompts/                                     # All Prompt Templates (Centralized)
 │   ├── router_prompt.py
@@ -1001,15 +1001,30 @@ dell-rag-platform/
 
 ```python
 class Settings(BaseSettings):
-    # LLM
-    OPENAI_API_KEY: str
-    OPENAI_GENERATION_MODEL: str = "gpt-4o"
-    OPENAI_GRADER_MODEL:     str = "gpt-4o-mini"
-    OPENAI_EMBEDDING_MODEL:  str = "text-embedding-3-small"
+    # Provider selection
+    LLM_PROVIDER:       str = "openai"   # openai | anthropic | gemini
+    EMBEDDING_PROVIDER: str = "openai"   # openai | gemini  (Anthropic has no embedding model)
+
+    # OpenAI
+    OPENAI_API_KEY:           str = ""
+    OPENAI_GENERATION_MODEL:  str = "gpt-4o"
+    OPENAI_GRADER_MODEL:      str = "gpt-4o-mini"
+    OPENAI_EMBEDDING_MODEL:   str = "text-embedding-3-small"
+
+    # Anthropic
+    ANTHROPIC_API_KEY:            str = ""
+    ANTHROPIC_GENERATION_MODEL:   str = "claude-sonnet-4-6"
+    ANTHROPIC_GRADER_MODEL:       str = "claude-haiku-4-5-20251001"
+
+    # Google Gemini
+    GOOGLE_API_KEY:           str = ""
+    GOOGLE_GENERATION_MODEL:  str = "gemini-2.0-flash"
+    GOOGLE_GRADER_MODEL:      str = "gemini-2.0-flash-lite"
+    GOOGLE_EMBEDDING_MODEL:   str = "models/text-embedding-004"
 
     # Observability
-    LANGSMITH_API_KEY: str
-    LANGSMITH_PROJECT: str = "dell-rag-platform"
+    LANGSMITH_API_KEY: str = ""
+    LANGSMITH_PROJECT: str = "agentic-rag-platform"
 
     # Storage
     STORAGE_BASE_PATH: str = "./storage"
@@ -1019,7 +1034,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # Platform
-    PLATFORM_ADMIN_KEY: str
+    PLATFORM_ADMIN_KEY: str = "change-me"
     ENVIRONMENT:        str = "development"   # development | production
 ```
 
@@ -1135,7 +1150,7 @@ services:
 
 | Phase | Modules | Deliverable | Status |
 |---|---|---|---|
-| 1 | `graph/`, `llm/`, `prompts/`, `vectorstore/` (core) | Working agentic RAG graph | Awaiting approval |
+| 1 | `graph/`, `llm/`, `prompts/`, `vectorstore/` (core) | Working agentic RAG graph | Completed |
 | 2 | `app/routes/query.py`, `app/schemas/` | Queryable via REST API | Awaiting approval |
 | 3 | `tenants/` (incl. `key_rotation.py`), `app/routes/tenants.py`, `middleware/tenant_resolver.py`, `middleware/rate_limiter.py` | Multi-tenant foundation + per-tenant quotas + key rotation | Awaiting approval |
 | 4 | `app/routes/docs.py`, `vectorstore/registry.py`, `vectorstore/ingestion_worker.py` | Per-tenant doc management + async ingestion | Awaiting approval |
@@ -1166,7 +1181,9 @@ services:
 | Doc Registry | SQLite (dev) / PostgreSQL (prod) | Lightweight dev, upgradeable for prod |
 | Tenant Isolation | Separate FAISS + registry per tenant | True data isolation, no cross-contamination |
 | Chunking metadata | doc_id + tenant_id on every chunk | Enables surgical doc removal without full re-index |
-| Project Name | dell-rag-platform | Signals platform thinking vs. point solution |
+| Multi-provider LLM | `LLM_PROVIDER` env flag (`openai` / `anthropic` / `gemini`) | Teams may have existing enterprise agreements with different providers; isolated to `llm/client.py` — no node-level changes required |
+| Multi-provider Embeddings | `EMBEDDING_PROVIDER` env flag (`openai` / `gemini`) | Anthropic excluded — no embedding model available; decoupled from LLM provider choice |
+| Project Name | agentic-rag-platform | Signals platform thinking vs. point solution |
 | Prompt templates | Centralized in `prompts/` | Tunable without touching node logic |
 | Thresholds | Centralized in `config/constants.py` | Behavior change without code change |
 | Guardrails layer | Decoupled from graph | Independently updatable, testable |
@@ -1179,7 +1196,7 @@ services:
 
 - LangChain + FAISS RAG assistant over 500+ OME documents
 - 80% reduction in onboarding queries achieved
-- Adopted by 7 teams across Dell
+- Adopted by 7 teams across the organization
 
 ### 18.2 What Is In Design / Architecture Phase
 
@@ -1190,7 +1207,7 @@ services:
 ### 18.3 How to Present in Interviews
 
 **Safe framing:**
-> "The base RAG assistant is live and in production — it's reduced onboarding queries by 80% and is used by 7 teams. I am currently architecting the next evolution: an agentic, multi-tenant platform using LangGraph that scales this across all Dell product lines."
+> "The base RAG assistant is live and in production — it's reduced onboarding queries by 80% and is used by 7 teams. I am currently architecting the next evolution: an agentic, multi-tenant platform using LangGraph that scales this across all product lines."
 
 ### 18.4 Approved Resume Bullet
 
@@ -1199,4 +1216,4 @@ services:
 ---
 
 *Document prepared by Chandiramouli Ravisankar | April 2026*  
-*dell-rag-platform | Version 1.1 | Review Amendments Applied*
+*agentic-rag-platform | Version 1.2 | Multi-provider LLM support added | Phase 1 Completed*

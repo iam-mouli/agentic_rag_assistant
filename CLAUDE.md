@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A multi-tenant Enterprise Knowledge Base Platform enabling any Dell product team to onboard documentation and get an AI knowledge assistant with zero platform-team dependency. Currently in design phase — the authoritative spec is `dell-rag-platform-design.md` (v1.1).
+A multi-tenant Enterprise Knowledge Base Platform enabling any product team to onboard documentation and get an AI knowledge assistant with zero platform-team dependency. The authoritative spec is `agentic-rag-platform-design.md` (v1.2).
 
 **Production baseline:** LangChain + FAISS RAG over 500+ OME docs, 80% reduction in onboarding queries, adopted by 7 teams.
 
@@ -15,8 +15,8 @@ A multi-tenant Enterprise Knowledge Base Platform enabling any Dell product team
 | Layer | Technology |
 |-------|-----------|
 | Agent Framework | LangGraph |
-| LLMs | OpenAI gpt-4o (generation), gpt-4o-mini (grading) |
-| Embeddings | OpenAI text-embedding-3-small |
+| LLMs | OpenAI / Anthropic / Gemini — configurable via `LLM_PROVIDER` |
+| Embeddings | OpenAI / Gemini — configurable via `EMBEDDING_PROVIDER` |
 | Vector Store | FAISS (per-tenant, isolated) |
 | API | FastAPI + Pydantic |
 | Task Queue | arq (Redis-backed async ingestion) |
@@ -69,6 +69,14 @@ Router → Retriever → DocGrader → Generator → HallucinationGrader → Ans
 - Router can short-circuit to direct-answer path (bypasses retrieval + citation enforcement)
 - Self-correction loop: poor retrieval → query rewrite → retry (capped at `MAX_REWRITE_ATTEMPTS=3`)
 
+### LLM Client (`llm/client.py`)
+
+Provider-agnostic factory with lazy init. Switch provider via env var — no code changes:
+- `LLM_PROVIDER=openai` → gpt-4o (generation) + gpt-4o-mini (grading)
+- `LLM_PROVIDER=anthropic` → claude-sonnet-4-6 (generation) + claude-haiku-4-5-20251001 (grading)
+- `LLM_PROVIDER=gemini` → gemini-2.0-flash (generation) + gemini-2.0-flash-lite (grading)
+- `EMBEDDING_PROVIDER` → `openai` or `gemini` (Anthropic has no embedding model)
+
 ### Key Thresholds (`config/constants.py`)
 
 ```python
@@ -115,14 +123,14 @@ GET  /metrics                    # Prometheus scrape
 
 ## Configuration
 
-Copy `.env.example` to `.env`. Required vars: `OPENAI_API_KEY`, `LANGSMITH_API_KEY`, `PLATFORM_ADMIN_KEY`, Redis connection, DB URL.
+Copy `.env.example` to `.env`. Set the API key for your chosen provider plus `PLATFORM_ADMIN_KEY` and Redis connection.
 
 All settings go through `config/settings.py` (Pydantic `BaseSettings`). All numeric thresholds live in `config/constants.py` — change them there, not inline.
 
 ## Implementation Phases
 
 The design doc specifies 8 phases. Implement in order:
-1. Core graph + LLM + prompts + vectorstore
+1. ~~Core graph + LLM + prompts + vectorstore~~ — **Completed**
 2. Query REST API + schemas
 3. Multi-tenant foundation + quotas + key rotation
 4. Per-tenant doc management + async ingestion

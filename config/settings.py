@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     # --- Observability ---
     LANGSMITH_API_KEY: str = ""
-    LANGSMITH_PROJECT: str = "dell-rag-platform"
+    LANGSMITH_PROJECT: str = "agentic-rag-platform"
 
     # --- Storage ---
     STORAGE_BASE_PATH: str = "./storage"
