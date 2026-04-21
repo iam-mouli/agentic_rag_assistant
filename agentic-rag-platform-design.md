@@ -3,7 +3,7 @@
 **Version:** 1.2  
 **Author:** Chandiramouli Ravisankar  
 **Date:** April 2026  
-**Status:** Architecture Approved | Phase 1 Completed | Phase 2 Awaiting Approval
+**Status:** Architecture Approved | Phases 1–4 Completed
 
 ---
 
@@ -1153,7 +1153,7 @@ services:
 | 1 | `graph/`, `llm/`, `prompts/`, `vectorstore/` (core) | Working agentic RAG graph | Completed |
 | 2 | `app/routes/query.py`, `app/schemas/` | Queryable via REST API | Completed |
 | 3 | `tenants/` (incl. `key_rotation.py`), `app/routes/tenants.py`, `middleware/tenant_resolver.py`, `middleware/rate_limiter.py` | Multi-tenant foundation + per-tenant quotas + key rotation | Completed |
-| 4 | `app/routes/docs.py`, `vectorstore/registry.py`, `vectorstore/ingestion_worker.py` | Per-tenant doc management + async ingestion | Awaiting approval |
+| 4 | `app/routes/docs.py`, `vectorstore/registry.py`, `vectorstore/ingestion_worker.py` | Per-tenant doc management + async ingestion | Completed |
 | 5 | `guardrails/` (incl. `injection_detector_doc.py`) | Input + output safety + indirect-injection defense | Awaiting approval |
 | 6 | `observability/langsmith/`, `observability/logging/` | Tracing + structured logs | Awaiting approval |
 | 7 | `observability/prometheus/`, `docker/grafana/`, `cache/semantic_cache.py` | Tenant-labeled metrics + dashboards + semantic cache | Awaiting approval |
