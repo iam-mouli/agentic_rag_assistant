@@ -6,6 +6,10 @@ from app.middleware.rate_limiter import RateLimiterMiddleware
 from app.middleware.tenant_resolver import TenantResolverMiddleware
 from app.routes import docs, health, query, tenants
 from config.settings import settings
+from observability.logging.structured_logger import configure_logging, get_logger
+
+configure_logging()
+logger = get_logger(__name__)
 
 
 @asynccontextmanager

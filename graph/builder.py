@@ -16,6 +16,7 @@ from graph.edges.conditions import (
     check_answer,
     check_loop_limit,
 )
+from observability.graph_tracing import traced_node
 
 _FALLBACK_ANSWER = (
     "I wasn't able to find a reliable answer in the documentation. "
@@ -36,14 +37,14 @@ def _fallback_node(state: GraphState) -> dict:
 def build_graph():
     workflow = StateGraph(GraphState)
 
-    workflow.add_node("router", router_node)
-    workflow.add_node("retriever", retriever_node)
-    workflow.add_node("doc_grader", doc_grader_node)
-    workflow.add_node("query_rewriter", query_rewriter_node)
-    workflow.add_node("generator", generator_node)
-    workflow.add_node("hallucination_grader", hallucination_grader_node)
-    workflow.add_node("answer_grader", answer_grader_node)
-    workflow.add_node("fallback", _fallback_node)
+    workflow.add_node("router", traced_node("router", router_node))
+    workflow.add_node("retriever", traced_node("retriever", retriever_node))
+    workflow.add_node("doc_grader", traced_node("doc_grader", doc_grader_node))
+    workflow.add_node("query_rewriter", traced_node("query_rewriter", query_rewriter_node))
+    workflow.add_node("generator", traced_node("generator", generator_node))
+    workflow.add_node("hallucination_grader", traced_node("hallucination_grader", hallucination_grader_node))
+    workflow.add_node("answer_grader", traced_node("answer_grader", answer_grader_node))
+    workflow.add_node("fallback", traced_node("fallback", _fallback_node))
 
     workflow.set_entry_point("router")
 

@@ -1,5 +1,3 @@
-import logging
-
 from arq.connections import RedisSettings
 
 from config.constants import (
@@ -9,12 +7,13 @@ from config.constants import (
 )
 from config.settings import settings
 from guardrails.indirect_injection import classify_chunk
+from observability.logging.structured_logger import get_logger
 from vectorstore.embedder import embed_texts
 from vectorstore.loader import load_and_chunk
 from vectorstore.registry import update_doc
 from vectorstore.store import add_chunks
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def index_document(ctx: dict, tenant_id: str, doc_id: str, file_path: str) -> None:
@@ -42,17 +41,17 @@ def _ingest_sync(tenant_id: str, doc_id: str, file_path: str) -> None:
         chunks = load_and_chunk(file_path, doc_id, tenant_id)
 
         safe_chunks = []
+        quarantine_count = 0
         for chunk in chunks:
             if classify_chunk(chunk.page_content):
                 safe_chunks.append(chunk)
             else:
+                quarantine_count += 1
                 logger.warning(
-                    "indirect_injection_quarantine",
-                    extra={
-                        "tenant_id": tenant_id,
-                        "doc_id": doc_id,
-                        "chunk_index": chunk.metadata.get("chunk_index"),
-                    },
+                    "chunk_quarantined",
+                    tenant_id=tenant_id,
+                    doc_id=doc_id,
+                    chunk_index=chunk.metadata.get("chunk_index"),
                 )
 
         all_embeddings: list[list[float]] = []
@@ -71,8 +70,23 @@ def _ingest_sync(tenant_id: str, doc_id: str, file_path: str) -> None:
             pages=pages,
         )
 
+        logger.info(
+            "doc_ingested",
+            tenant_id=tenant_id,
+            doc_id=doc_id,
+            chunk_count=len(safe_chunks),
+            quarantined_count=quarantine_count,
+            pages=pages,
+        )
+
     except Exception as exc:
         update_doc(tenant_id, doc_id, status="failed", error_message=str(exc))
+        logger.error(
+            "ingestion_failed",
+            tenant_id=tenant_id,
+            doc_id=doc_id,
+            error=str(exc),
+        )
         raise
 
 
