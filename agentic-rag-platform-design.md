@@ -1188,30 +1188,6 @@ services:
 | Thresholds | Centralized in `config/constants.py` | Behavior change without code change |
 | Guardrails layer | Decoupled from graph | Independently updatable, testable |
 
----
-
-## 18. Interview Context & Resume Bullet
-
-### 18.1 What Is Live in Production
-
-- LangChain + FAISS RAG assistant over 500+ OME documents
-- 80% reduction in onboarding queries achieved
-- Adopted by 7 teams across the organization
-
-### 18.2 What Is In Design / Architecture Phase
-
-- LangGraph agentic upgrade (self-correcting pipeline)
-- Multi-tenant platform architecture
-- Guardrails, observability, doc lifecycle management
-
-### 18.3 How to Present in Interviews
-
-**Safe framing:**
-> "The base RAG assistant is live and in production — it's reduced onboarding queries by 80% and is used by 7 teams. I am currently architecting the next evolution: an agentic, multi-tenant platform using LangGraph that scales this across all product lines."
-
-### 18.4 Approved Resume Bullet
-
-> "Designed and deployed a multi-tenant **Enterprise Knowledge Base Platform** using **LangGraph, FAISS, GPT-4o, FastAPI, and NeMo Guardrails** — featuring stateful multi-node Agentic RAG orchestration, hallucination grading, self-serve tenant onboarding, and LangSmith + Prometheus/Grafana observability; drove **80% reduction** in onboarding queries across **7 teams**."
 
 ---
 
