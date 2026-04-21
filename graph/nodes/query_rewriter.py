@@ -1,5 +1,5 @@
 from graph.state import GraphState
-from llm.openai_client import grade
+from llm.client import grade
 from prompts.query_rewriter_prompt import build_rewriter_messages
 
 

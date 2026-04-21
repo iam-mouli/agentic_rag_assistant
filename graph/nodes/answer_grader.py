@@ -1,5 +1,5 @@
 from graph.state import GraphState
-from llm.openai_client import grade
+from llm.client import grade
 from prompts.answer_grader_prompt import build_answer_grader_messages
 
 

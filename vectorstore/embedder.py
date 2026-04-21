@@ -1,4 +1,4 @@
-from llm.openai_client import embed as _embed
+from llm.client import embed as _embed
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:

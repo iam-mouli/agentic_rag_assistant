@@ -1,5 +1,5 @@
 from graph.state import GraphState
-from llm.openai_client import generate
+from llm.client import generate
 from prompts.generator_prompt import build_generator_messages
 
 
