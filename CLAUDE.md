@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A multi-tenant Enterprise Knowledge Base Platform enabling any product team to onboard documentation and get an AI knowledge assistant with zero platform-team dependency. The authoritative spec is `agentic-rag-platform-design.md` (v1.2).
+A multi-tenant Enterprise Knowledge Base Platform enabling any product team to onboard documentation and get an AI knowledge assistant with zero platform-team dependency. The authoritative spec is `agentic-rag-platform-design.md` (v1.3).
 
 **Target state:** Agentic multi-tenant platform using LangGraph, self-serve tenant onboarding, hallucination grading, and full observability.
 
@@ -24,6 +24,7 @@ A multi-tenant Enterprise Knowledge Base Platform enabling any product team to o
 | Tracing | LangSmith |
 | Metrics | Prometheus + Grafana |
 | Logging | structlog (JSON) |
+| Frontend | Next.js 14 (App Router) + TypeScript + Tailwind CSS + TanStack Query |
 
 ## Commands
 
@@ -120,6 +121,7 @@ GET  /{tenant_id}/docs               # List docs
 GET  /{tenant_id}/docs/{doc_id}      # Get doc metadata
 DELETE /{tenant_id}/docs/{doc_id}    # Remove doc
 PUT  /{tenant_id}/docs/{doc_id}      # Replace doc (new version)
+POST /{tenant_id}/feedback           # Thumbs-up/down wired to LangSmith run_id
 GET  /health, /health/{tenant_id}    # Status
 GET  /metrics                        # Prometheus scrape
 ```
@@ -144,6 +146,7 @@ All settings go through `config/settings.py` (Pydantic `BaseSettings`). All nume
 | 6 | **Completed** | Tracing + structured logs (LangSmith, structlog) |
 | 7 | **Completed** | Metrics + dashboards + semantic cache |
 | 8 | **Completed** | Full test suite + security tests |
+| 9 | **Completed** | Next.js tenant frontend + CORS middleware + feedback endpoint + docker-compose |
 
 Do not skip ahead — each phase depends on the previous. The design doc is the source of truth for implementation details.
 
@@ -349,3 +352,31 @@ Eval (`tests/eval/`):
 - Integration and security tests use **real SQLite** (via `tmp_storage`). Never mock the database — prior incidents showed mock/prod divergence masked broken migrations.
 - `pytest.ini` sets `asyncio_mode = auto` so `async def test_*` functions are collected and run without explicit `@pytest.mark.asyncio` decorators.
 - `tests/eval/run_evals.py` `DATASET_PATH` points to `ome/eval_dataset.json` (subdirectory), not the parent `eval/` directory. The subdirectory structure allows multiple tenant-specific golden datasets side by side.
+
+---
+
+### Phase 9 — Next.js Tenant Frontend
+**Commit:** `3b29993`
+
+**What was built:**
+
+Backend additions:
+- `app/main.py` — `CORSMiddleware` added. Origins controlled by `FRONTEND_ORIGINS` env var (comma-separated, default `http://localhost:3001`). Middleware is added **before** `TenantResolverMiddleware` / `RateLimiterMiddleware` so CORS preflight requests are handled without triggering auth.
+- `app/routes/feedback.py` — `POST /{tenant_id}/feedback`. Accepts `{run_id, score, comment}`; calls `langsmith.Client().create_feedback()`. Returns 502 if LangSmith is unreachable — fail-open rather than silently swallowing the error.
+- `config/settings.py` — `FRONTEND_ORIGINS: str` field added.
+- `docker-compose.yml` — 6-service compose: redis, platform-api, ingestion-worker, prometheus, grafana, frontend (port 3001). `Dockerfile.api` added for the API + worker image.
+- `docker/prometheus.yml` — Prometheus scrape config (was missing; required for the grafana service).
+
+Frontend (`frontend/`):
+- **Auth:** `sessionStorage` only — clears on tab close. `auth-provider.tsx` is a React context that reads/writes via `lib/auth.ts`. On any `401` the `api-client.ts` fetch wrapper calls `clearCredentials()` and does `window.location.href = "/login"` — handles key rotation gracefully without React routing state.
+- **Login probe:** `login/page.tsx` temporarily writes credentials to `sessionStorage` before calling `GET /{tenant}/docs`. If the probe succeeds it calls `login()` (which is a no-op write since they're already set); if it fails it removes them immediately. This avoids duplicating the fetch logic.
+- **Upload polling:** `use-poll-doc.ts` uses TanStack Query's `refetchInterval` callback — returns `3000` when `status === "processing"`, `false` otherwise. The `doc-upload.tsx` component watches the polled data and fires a toast + clears `pollingId` when status changes. This approach avoids a `useEffect` polling loop.
+- **Query chat:** `use-query-agent.ts` uses a raw `fetch` (not `api.post`) to capture the `X-Run-ID` response header, which TanStack Query's `useMutation` doesn't expose. The run_id is returned alongside the response body as `{ ...data, runId }`.
+- **CSP:** `next.config.ts` sets `connect-src 'self' <API_URL>` dynamically from `NEXT_PUBLIC_API_URL`. This means the CSP header is baked at build time — if the API URL changes at runtime in the container, rebuild is required.
+- **`"use client"` boundary:** All interactive components are Client Components. Page files under `(app)/` are Server Components (no `"use client"`) — they import and render Client Components. This keeps the auth check in `protected-route.tsx` client-only (sessionStorage is browser-only).
+
+**Non-obvious decisions:**
+- `CORS` middleware must be added **before** `TenantResolverMiddleware` in FastAPI (which uses LIFO ordering). Adding it after would mean preflight `OPTIONS` requests hit the tenant resolver, which would reject them with 401/403.
+- `sessionStorage` vs `localStorage`: sessionStorage clears on tab close, reducing the XSS blast radius window. Acceptable for internal MVP; the migration path to HttpOnly cookies is clean (swap `lib/auth.ts` and add a `/session` endpoint).
+- The `(app)` route group uses parenthesis-folder syntax (Next.js App Router convention). The folder name is excluded from the URL — `/docs` not `/(app)/docs`. The group's `layout.tsx` wraps all protected pages with `<ProtectedRoute>`.
+- `X-API-Key` is never logged anywhere in the frontend. The `api-client.ts` error handler reads the response body JSON for `detail`, not the request headers.

@@ -1,9 +1,9 @@
 # agentic-rag-platform — System Design Document
 
-**Version:** 1.2  
+**Version:** 1.3  
 **Author:** Chandiramouli Ravisankar  
 **Date:** April 2026  
-**Status:** Architecture Approved | All Phases Completed
+**Status:** Architecture Approved | All 9 Phases Completed
 
 ---
 
@@ -78,6 +78,11 @@ Platform is now being architected to scale this across all product lines.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
+│              FRONTEND LAYER (Next.js 14 — port 3001)            │
+│   Login · Documents (upload/list/delete) · Query/Chat · Settings │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ CORS (X-Tenant-ID + X-API-Key headers)
+┌──────────────────────────▼──────────────────────────────────────┐
 │                        API LAYER (FastAPI)                       │
 │   /tenants   /{tenant}/query   /{tenant}/docs   /{tenant}/feedback│
 └──────────────────────────┬──────────────────────────────────────┘
@@ -146,6 +151,7 @@ Platform is now being architected to scale this across all product lines.
 | Dashboards | Grafana | Platform + tenant-level visualization |
 | Logging | structlog (JSON) | Structured per-node logging |
 | Containerization | Docker + Docker Compose | Full stack deployment |
+| Frontend | Next.js 14 (App Router) + TypeScript + Tailwind CSS + TanStack Query | Self-serve tenant UI |
 
 ---
 
@@ -1158,9 +1164,10 @@ services:
   redis:               # Cache + rate-limit counters + arq queue + FAISS write locks (port 6379)
   prometheus:          # Scrapes /metrics every 15s (port 9090)
   grafana:             # Dashboards (port 3000), pre-loaded dashboards
+  frontend:            # Next.js tenant UI (port 3001) — Phase 9
 ```
 
-`platform-api` and `ingestion-worker` ship in the same Docker image; the compose file sets different entrypoints (`uvicorn app.main:app` vs `arq vectorstore.ingestion_worker.WorkerSettings`). Redis is a hard dependency for both.
+`platform-api` and `ingestion-worker` ship in the same Docker image; the compose file sets different entrypoints (`uvicorn app.main:app` vs `arq vectorstore.ingestion_worker.WorkerSettings`). Redis is a hard dependency for both. The frontend connects to the API via CORS — `FRONTEND_ORIGINS` env var on the API controls the allow-list.
 
 ### 15.2 First-Run Checklist
 
@@ -1169,9 +1176,12 @@ services:
 3. Platform API available at `http://localhost:8000`
 4. Grafana available at `http://localhost:3000` (admin/admin)
 5. Both dashboards pre-loaded from `docker/grafana/dashboard_*.json`
-6. Register first tenant: `POST /tenants/register`
+6. Register first tenant: `POST /tenants/register` — save the returned `tenant_id` and `api_key`
 7. Upload first document: `POST /{tenant}/docs/upload`
 8. Query: `POST /{tenant}/query`
+9. **Frontend UI available at `http://localhost:3001`** — log in with the `tenant_id` + `api_key` from step 6
+10. Drag-drop a PDF on the Documents page → badge cycles `processing → active`
+11. Navigate to Query → ask a question → receive answer + citation cards + thumbs-up/down
 
 ---
 
@@ -1187,6 +1197,7 @@ services:
 | 6 | `observability/langsmith/`, `observability/logging/` | Tracing + structured logs | Completed |
 | 7 | `observability/prometheus/`, `docker/grafana/`, `cache/semantic_cache.py` | Tenant-labeled metrics + dashboards + semantic cache | Completed |
 | 8 | `tests/` (unit + integration + security + eval) | Full coverage — 23 test files, ~164 tests, CI-gated LangSmith evals | Completed |
+| 9 | `frontend/` + CORS middleware in `app/main.py` + `app/routes/feedback.py` + `docker-compose.yml` | Next.js tenant UI: login, docs CRUD, query/response with citations, thumbs-up/down feedback | Completed |
 
 ---
 
@@ -1221,4 +1232,4 @@ services:
 ---
 
 *Document prepared by Chandiramouli Ravisankar | April 2026*  
-*agentic-rag-platform | Version 1.2 | Multi-provider LLM support added | All 8 Phases Completed*
+*agentic-rag-platform | Version 1.3 | Phase 9: Next.js tenant frontend added | All 9 Phases Completed*
