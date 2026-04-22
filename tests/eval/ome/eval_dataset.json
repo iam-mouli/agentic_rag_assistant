@@ -1,0 +1,62 @@
+[
+  {
+    "question": "How do I configure SNMP alert destinations in OpenManage Enterprise?",
+    "expected_answer": "SNMP alert destinations can be configured in OME by navigating to Alerts > Alert Destinations, clicking Add, selecting SNMP as the destination type, and providing the host IP, community string, and port.",
+    "doc_source": "OME_UserGuide_v4.pdf",
+    "page": 142
+  },
+  {
+    "question": "What are the default credentials for OpenManage Enterprise after fresh installation?",
+    "expected_answer": "The default administrator credentials for OME after a fresh installation are username 'admin' and a password set during the initial setup wizard. There are no factory-default passwords for the admin account.",
+    "doc_source": "OME_InstallationGuide.pdf",
+    "page": 34
+  },
+  {
+    "question": "How do I discover devices in OpenManage Enterprise?",
+    "expected_answer": "Device discovery in OME is performed via Configuration > Discovery. You can create a discovery job by specifying IP ranges, individual IPs, or hostnames, and selecting the appropriate protocol (iDRAC, SNMP, or WS-Man).",
+    "doc_source": "OME_UserGuide_v4.pdf",
+    "page": 67
+  },
+  {
+    "question": "What is the maximum number of devices OME can manage?",
+    "expected_answer": "OpenManage Enterprise can manage up to 8,000 devices in a single instance. For larger environments, multiple OME instances can be federated.",
+    "doc_source": "OME_ReleaseNotes.pdf",
+    "page": 5
+  },
+  {
+    "question": "How do I create a device group in OME?",
+    "expected_answer": "Device groups are created in OME by navigating to Devices > Groups, clicking Create Group, providing a name and optional description, and adding devices either manually or using a query-based rule.",
+    "doc_source": "OME_UserGuide_v4.pdf",
+    "page": 89
+  },
+  {
+    "question": "How can I schedule a firmware update job in OpenManage Enterprise?",
+    "expected_answer": "Firmware update jobs in OME are scheduled from Configuration > Firmware & Driver Compliance. Select the target devices, choose a firmware baseline, and schedule the job for immediate execution or a specific date and time.",
+    "doc_source": "OME_UserGuide_v4.pdf",
+    "page": 201
+  },
+  {
+    "question": "What protocols does OME use to collect hardware inventory?",
+    "expected_answer": "OME collects hardware inventory using iDRAC REST API (Redfish), WS-Man (WMI for Windows devices), and SNMP for network devices. iDRAC-based discovery provides the most detailed inventory data.",
+    "doc_source": "OME_UserGuide_v4.pdf",
+    "page": 71
+  },
+  {
+    "question": "How do I configure email notifications for critical alerts in OME?",
+    "expected_answer": "Email notifications for critical alerts are set up under Alerts > Alert Destinations by adding an email destination with SMTP server details, then creating an alert policy under Alerts > Alert Policies that maps critical severity events to that destination.",
+    "doc_source": "OME_UserGuide_v4.pdf",
+    "page": 145
+  },
+  {
+    "question": "What is the OME appliance hardware requirement for managing 1000 servers?",
+    "expected_answer": "For managing up to 1000 servers, OME requires a minimum of 8 vCPUs, 32 GB RAM, and 300 GB disk storage when deployed as a virtual appliance.",
+    "doc_source": "OME_InstallationGuide.pdf",
+    "page": 12
+  },
+  {
+    "question": "How do I export OME audit logs?",
+    "expected_answer": "OME audit logs can be exported from the Monitor > Audit Logs page by clicking Export and selecting CSV or XML format. Logs can be filtered by date range, user, or action type before exporting.",
+    "doc_source": "OME_UserGuide_v4.pdf",
+    "page": 312
+  }
+]

@@ -143,7 +143,7 @@ All settings go through `config/settings.py` (Pydantic `BaseSettings`). All nume
 | 5 | **Completed** | Guardrails — input + output + indirect injection defense |
 | 6 | **Completed** | Tracing + structured logs (LangSmith, structlog) |
 | 7 | **Completed** | Metrics + dashboards + semantic cache |
-| 8 | Pending | Full test suite + security tests |
+| 8 | **Completed** | Full test suite + security tests |
 
 Do not skip ahead — each phase depends on the previous. The design doc is the source of truth for implementation details.
 
@@ -298,14 +298,54 @@ Do not skip ahead — each phase depends on the previous. The design doc is the 
 
 ---
 
-### Phase 8 — Full Test Suite + Security Tests (Next)
+### Phase 8 — Full Test Suite + Security Tests
+**Commit:** *(see git log)*
 
-**What to build:**
-- `tests/unit/` — unit tests for all graph nodes, guardrails, vectorstore, tenant auth, semantic cache, metrics
-- `tests/integration/` — full graph integration tests (real LLM optional, mock acceptable), API endpoint tests with TestClient
-- `tests/eval/run_evals.py` — LangSmith evals (CI-gated)
-- Security tests: prompt injection, PII leakage, cross-tenant isolation, rate limit enforcement, key rotation
+**What was built:**
 
-**Key constraints:**
-- Do not mock the database in integration tests (lessons from prior incidents)
-- LangSmith evals are CI-gated — they should fail the build if hallucination rate exceeds threshold
+`tests/conftest.py` — shared fixtures for all layers:
+- `tmp_storage` — monkeypatches `settings.STORAGE_BASE_PATH` and `settings.MASTER_DB_PATH` on the singleton object so all modules see `tmp_path`-redirected SQLite/FAISS at call time
+- `seeded_tenant` — creates a real dim=8 FAISS index (numpy seed=42, 3 chunks) + real registry row (status=active); patches `vectorstore.retriever.embed_query` to return a compatible dim-8 vector
+- `mock_llm` — patches per-node: `graph.nodes.router.grade` → "retrieve", `graph.nodes.doc_grader.grade` → "yes", `graph.nodes.query_rewriter.grade` → rephrased string, `graph.nodes.hallucination_grader.grade` → "0.90", `graph.nodes.answer_grader.grade` → "0.90", `graph.nodes.generator.generate` → canned answer
+- `registered_tenant` — calls `/tenants/register` via TestClient and returns `{tenant_id, name, api_key}`
+
+Unit tests (`tests/unit/`):
+- `test_router.py` (3) — retrieve/direct_answer decisions, ambiguous defaults to retrieve
+- `test_doc_grader.py` (5) — filter irrelevant, pass relevant, partial filter, empty docs, rewritten_query used
+- `test_query_rewriter.py` (4) — rewrite_count increments, sets rewritten_query, strips whitespace
+- `test_hallucination_grader.py` (5) — float parsing "0.92", low score, "no"→0.0, "yes"→1.0, threshold boundary
+- `test_answer_grader.py` (5) — "0.88" passes, "0.30" fails, "yes"→1.0, "no"→0.0, exact threshold
+- `test_guardrails_input.py` (26) — all block_codes: QUERY_TOO_SHORT, QUERY_TOO_LONG, INJECTION_DETECTED, PII_DETECTED, OFF_TOPIC; pipeline short-circuit
+- `test_guardrails_output.py` (15) — HALLUCINATION_RISK, MISSING_CITATIONS, fallback skip, direct_answer skip
+- `test_vectorstore.py` (7) — loader (PyPDFLoader mocked), store (add_chunks/search/remove_doc_chunks), registry CRUD
+- `test_tenant_auth.py` (5) — generate_api_key (64-char hex), hash/verify, rotation invalidates old key
+- `test_semantic_cache.py` (6 async) — get/set/hit/miss/invalidate/fail-open with AsyncMock Redis
+- `test_metrics.py` (4) — Counter increments, guardrail_blocks_total, ingestion_total, fail-safe pattern
+
+Integration tests (`tests/integration/`):
+- `test_graph_retrieve_path.py` (5 async) — direct `await rag_graph.ainvoke()` with seeded_tenant + mock_llm; citations, scores, route_decision, rewrite_count=0
+- `test_graph_rewrite_path.py` (3 async) — doc_grader rejects first N calls, accepts after; rewrite_count increments
+- `test_graph_fallback_path.py` (4 async) — doc_grader always "no" → fallback=True, correct shape, rewrite_count==MAX_REWRITE_ATTEMPTS
+- `test_query_endpoint.py` (11) — HTTP TestClient: happy path, unknown tenant 401, wrong key 401, injection 422, off-topic 422, cache hit/miss, rate limit 429, metrics 200
+- `test_docs_endpoint.py` (7) — upload 202→active, duplicate 409, list isolation, delete, nonexistent 404, replace bumps version
+- `test_tenant_onboarding.py` (5) — storage structure created, duplicate rejected, deactivated 401, key rotation, register→upload→seed FAISS→query→citation check
+- `test_multitenant_isolation.py` (5) — header/path mismatch 403, wrong key 401, doc IDs not cross-contaminated, cannot delete other tenant's doc, simultaneous queries succeed
+
+Security tests (`tests/security/`):
+- `test_prompt_injection.py` (3) — direct injection 422, indirect quarantine tracking, generator spy
+- `test_pii_leakage.py` (6) — SSN/email queries 422, clean query 200, unit-level check_pii blocks
+- `test_cross_tenant_isolation.py` (4) — path/header mismatch 403, wrong key 401, cross-doc contamination, delete 403
+- `test_rate_limit_enforcement.py` (4) — QPS exceeded 429, within limit 200, token budget 429, fail-open when Redis=None
+- `test_key_rotation.py` (3) — old key 401, new key 200, atomicity (new key immediately verifiable)
+
+Eval (`tests/eval/`):
+- `run_evals.py` — exits 0 if LANGSMITH_API_KEY unset; exits 1 if hallucination_rate ≥ HALLUCINATION_THRESHOLD or mean_answer_score < ANSWER_SCORE_THRESHOLD; falls back to local eval if LangSmith unreachable
+- `ome/eval_dataset.json` — 10 golden Q&A pairs for OME tenant (SNMP alerts, device discovery, firmware, hardware inventory, audit logs, etc.)
+
+**Non-obvious decisions:**
+- LLM mock patches must target each node's module namespace (`graph.nodes.router.grade`, not `llm.client.grade`). Nodes do `from llm.client import grade` which creates a local binding; patching the source does not affect already-imported names.
+- Rate limit tests require two things together: `app.state.redis = object()` (non-None sentinel to bypass fail-open) AND `monkeypatch.setattr("app.middleware.rate_limiter._check_qps", ...)`. Reset `app.state.redis = None` in a `finally` block.
+- `seeded_tenant` FAISS dim=8: small dimension avoids calling the real embeddings API. `embed_query` is monkeypatched to return a compatible dim-8 vector in all integration/security tests that invoke the retriever.
+- Integration and security tests use **real SQLite** (via `tmp_storage`). Never mock the database — prior incidents showed mock/prod divergence masked broken migrations.
+- `pytest.ini` sets `asyncio_mode = auto` so `async def test_*` functions are collected and run without explicit `@pytest.mark.asyncio` decorators.
+- `tests/eval/run_evals.py` `DATASET_PATH` points to `ome/eval_dataset.json` (subdirectory), not the parent `eval/` directory. The subdirectory structure allows multiple tenant-specific golden datasets side by side.
