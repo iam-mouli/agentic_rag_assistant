@@ -3,7 +3,7 @@
 **Version:** 1.2  
 **Author:** Chandiramouli Ravisankar  
 **Date:** April 2026  
-**Status:** Architecture Approved | Phases 1–4 Completed
+**Status:** Architecture Approved | All Phases Completed
 
 ---
 
@@ -960,25 +960,37 @@ agentic-rag-platform/
 │   └── constants.py                             # All thresholds + limits
 │
 ├── tests/
+│   ├── conftest.py                              # Shared fixtures: tmp_storage, seeded_tenant, mock_llm
 │   ├── unit/
 │   │   ├── test_router.py
 │   │   ├── test_doc_grader.py
 │   │   ├── test_query_rewriter.py
 │   │   ├── test_hallucination_grader.py
+│   │   ├── test_answer_grader.py
 │   │   ├── test_guardrails_input.py
 │   │   ├── test_guardrails_output.py
-│   │   ├── test_tenant_manager.py
-│   │   └── test_tenant_isolation.py
+│   │   ├── test_vectorstore.py
+│   │   ├── test_tenant_auth.py
+│   │   ├── test_semantic_cache.py
+│   │   └── test_metrics.py
 │   ├── integration/
 │   │   ├── test_graph_retrieve_path.py
 │   │   ├── test_graph_rewrite_path.py
 │   │   ├── test_graph_fallback_path.py
-│   │   ├── test_multitenant_query.py
-│   │   └── test_tenant_onboarding.py
+│   │   ├── test_query_endpoint.py
+│   │   ├── test_docs_endpoint.py
+│   │   ├── test_tenant_onboarding.py
+│   │   └── test_multitenant_isolation.py
+│   ├── security/
+│   │   ├── test_prompt_injection.py
+│   │   ├── test_pii_leakage.py
+│   │   ├── test_cross_tenant_isolation.py
+│   │   ├── test_rate_limit_enforcement.py
+│   │   └── test_key_rotation.py
 │   └── eval/
-│       └── {tenant}/
-│           ├── eval_dataset.json
-│           └── run_evals.py
+│       ├── run_evals.py                         # CI-gated; exits 1 on quality regression
+│       └── ome/
+│           └── eval_dataset.json                # 10 golden Q&A pairs for OME tenant
 │
 ├── docker/
 │   ├── Dockerfile
@@ -1081,40 +1093,57 @@ FAISS_WRITE_LOCK_TTL_SECONDS        = 600     # 10 minutes
 
 ## 14. Testing Strategy
 
-### 14.1 Unit Tests (per module)
+### 14.1 Unit Tests (`tests/unit/`)
 
-- `test_router.py` — Router correctly classifies retrieve vs. direct
-- `test_doc_grader.py` — Grader passes relevant chunks, fails irrelevant ones
-- `test_query_rewriter.py` — Rewriter produces meaningfully different queries
-- `test_hallucination_grader.py` — Grader correctly scores grounded vs. hallucinated answers
-- `test_guardrails_input.py` — PII stripped, injections blocked, off-topic rejected
-- `test_guardrails_output.py` — Hallucination gate blocks, citation enforcer validates
-- `test_tenant_manager.py` — CRUD operations on tenant registry
-- `test_tenant_isolation.py` — Tenant A cannot retrieve Tenant B's docs
+All LLM/Redis/FAISS dependencies mocked. Each test file is independently runnable.
 
-### 14.2 Integration Tests (full graph runs)
+- `test_router.py` (3) — retrieve / direct_answer decisions; ambiguous input defaults to retrieve
+- `test_doc_grader.py` (5) — filter all irrelevant, pass all relevant, partial filter, empty docs, uses rewritten_query
+- `test_query_rewriter.py` (4) — rewrite_count increments, sets rewritten_query, strips whitespace
+- `test_hallucination_grader.py` (5) — float parsing "0.92", low score "0.15", "no"→0.0, "yes"→1.0, threshold boundary
+- `test_answer_grader.py` (5) — "0.88" passes, "0.30" fails, "yes"→1.0, "no"→0.0, exact threshold
+- `test_guardrails_input.py` (26) — all block_codes (QUERY_TOO_SHORT, QUERY_TOO_LONG, INJECTION_DETECTED, PII_DETECTED, OFF_TOPIC), pipeline short-circuit
+- `test_guardrails_output.py` (15) — HALLUCINATION_RISK, MISSING_CITATIONS, fallback skip, direct_answer skip
+- `test_vectorstore.py` (7) — loader (PyPDFLoader mocked), store CRUD, registry status lifecycle
+- `test_tenant_auth.py` (5) — key generation (64-char hex), hash/verify, rotation invalidates old key
+- `test_semantic_cache.py` (6 async) — get/set/hit/miss/invalidate/fail-open with AsyncMock Redis
+- `test_metrics.py` (4) — Counter increments, guardrail_blocks_total, ingestion_total, fail-safe pattern
 
-- `test_graph_retrieve_path.py` — Happy path: query → retrieve → grade → generate → pass all guardrails
-- `test_graph_rewrite_path.py` — Retrieval fails → query rewrites → second attempt succeeds
-- `test_graph_fallback_path.py` — 3 rewrites exhausted → graceful fallback returned
-- `test_multitenant_query.py` — Two simultaneous tenants return fully isolated results
-- `test_tenant_onboarding.py` — Register → upload doc → query → verify citation from uploaded doc
+### 14.2 Integration Tests (`tests/integration/`)
 
-### 14.3 LangSmith Evaluation
+Real SQLite (via `tmp_storage` fixture). LLM mocked. No DB mocking.
 
-- Golden Q&A datasets per tenant in `tests/eval/{tenant}/eval_dataset.json`
-- `run_evals.py` submits dataset to LangSmith evaluator
-- Evaluates: answer correctness, faithfulness, citation accuracy, latency
-- **Runs automatically in CI** on any PR touching `graph/`, `prompts/`, or `guardrails/`
-- Regression on faithfulness, correctness, or citation accuracy blocks merge
+- `test_graph_retrieve_path.py` (5 async) — direct `await rag_graph.ainvoke()` with seeded FAISS; answer, citations, scores, route_decision, rewrite_count
+- `test_graph_rewrite_path.py` (3 async) — doc_grader rejects first N calls, accepts after; rewrite_count increments correctly
+- `test_graph_fallback_path.py` (4 async) — doc_grader always "no" → fallback=True, correct shape, rewrite_count==MAX_REWRITE_ATTEMPTS
+- `test_query_endpoint.py` (11) — HTTP TestClient: happy path, 401/403 auth checks, 422 guardrail blocks, cache hit/miss, rate limit 429, /metrics 200
+- `test_docs_endpoint.py` (7) — upload 202→active, duplicate 409, list isolation, delete, nonexistent 404, replace bumps version
+- `test_tenant_onboarding.py` (5) — storage structure created, duplicate rejected, deactivated 401, key rotation, register→upload→seed FAISS→query→citation check
+- `test_multitenant_isolation.py` (5) — header/path mismatch 403, wrong key 401, doc IDs not cross-contaminated, delete 403, simultaneous queries isolated
 
-### 14.4 Security Tests
+### 14.3 Security Tests (`tests/security/`)
 
-- **Indirect injection corpus** — curated set of PDFs containing adversarial instructions; verify chunks are quarantined and generator ignores embedded commands
-- **API key rotation e2e** — old key is invalidated immediately after rotation; new key works
-- **Rate-limit enforcement** — exceeding `qps_limit` returns 429 with `Retry-After`; exceeding monthly budget does likewise
-- **Tenant-isolation fuzz** — probe every per-tenant endpoint with mismatched `X-Tenant-ID` vs API key → must 401/403
-- **PII redaction** — corpus of queries with embedded PII; verify header set, token counts logged, no raw PII in logs
+Real SQLite + real auth flow. Only LLM mocked.
+
+- `test_prompt_injection.py` (3) — direct injection 422, indirect chunk quarantine tracked via patched classify_chunk, generator spy confirms no injection text reaches generate()
+- `test_pii_leakage.py` (6) — SSN query 422, email query 422, clean query 200, unit-level check_pii blocks SSN/email/passes clean
+- `test_cross_tenant_isolation.py` (4) — header/path mismatch 403, wrong key 401, docs not cross-contaminated, cannot delete another tenant's doc 403
+- `test_rate_limit_enforcement.py` (4) — QPS exceeded 429 (mock _check_qps + non-None redis sentinel), within limit 200, token budget exceeded 429, fail-open when Redis=None
+- `test_key_rotation.py` (3) — old key 401 after rotation, new key 200, atomicity (new key immediately verifiable against stored hash)
+
+### 14.4 LangSmith Evaluation (`tests/eval/`)
+
+- Golden Q&A datasets per tenant in `tests/eval/{tenant}/eval_dataset.json`; OME dataset ships with 10 curated pairs covering SNMP, device discovery, firmware, inventory, audit logs
+- `run_evals.py` exits 0 if `LANGSMITH_API_KEY` unset (graceful skip in local dev); exits 1 if `hallucination_rate >= HALLUCINATION_THRESHOLD` or `mean_answer_score < ANSWER_SCORE_THRESHOLD`
+- Falls back to local eval (no LangSmith upload) if LangSmith is unreachable
+- **CI-gated** — runs on any PR touching `graph/`, `prompts/`, or `guardrails/`; regression blocks merge
+
+### 14.5 Test Infrastructure
+
+- `tests/conftest.py` — shared fixtures: `tmp_storage` (monkeypatches `settings` singleton), `seeded_tenant` (real dim=8 FAISS + real registry row), `mock_llm` (per-node namespace patches), `registered_tenant`
+- `pytest.ini` — `pythonpath = .`, `asyncio_mode = auto`
+- LLM mock patches target each node's module namespace (`graph.nodes.router.grade`, not `llm.client.grade`) because nodes use `from llm.client import grade` local bindings
+- Rate-limit tests require `app.state.redis = object()` (non-None sentinel) + mocked `_check_qps`; reset in `finally` block
 
 ---
 
@@ -1154,10 +1183,10 @@ services:
 | 2 | `app/routes/query.py`, `app/schemas/` | Queryable via REST API | Completed |
 | 3 | `tenants/` (incl. `key_rotation.py`), `app/routes/tenants.py`, `middleware/tenant_resolver.py`, `middleware/rate_limiter.py` | Multi-tenant foundation + per-tenant quotas + key rotation | Completed |
 | 4 | `app/routes/docs.py`, `vectorstore/registry.py`, `vectorstore/ingestion_worker.py` | Per-tenant doc management + async ingestion | Completed |
-| 5 | `guardrails/` (incl. `injection_detector_doc.py`) | Input + output safety + indirect-injection defense | Awaiting approval |
-| 6 | `observability/langsmith/`, `observability/logging/` | Tracing + structured logs | Awaiting approval |
-| 7 | `observability/prometheus/`, `docker/grafana/`, `cache/semantic_cache.py` | Tenant-labeled metrics + dashboards + semantic cache | Awaiting approval |
-| 8 | `tests/` (unit + integration + security + eval) | Full coverage incl. injection corpus, rate-limit, isolation fuzz | Awaiting approval |
+| 5 | `guardrails/` (incl. `injection_detector_doc.py`) | Input + output safety + indirect-injection defense | Completed |
+| 6 | `observability/langsmith/`, `observability/logging/` | Tracing + structured logs | Completed |
+| 7 | `observability/prometheus/`, `docker/grafana/`, `cache/semantic_cache.py` | Tenant-labeled metrics + dashboards + semantic cache | Completed |
+| 8 | `tests/` (unit + integration + security + eval) | Full coverage — 23 test files, ~164 tests, CI-gated LangSmith evals | Completed |
 
 ---
 
@@ -1192,4 +1221,4 @@ services:
 ---
 
 *Document prepared by Chandiramouli Ravisankar | April 2026*  
-*agentic-rag-platform | Version 1.2 | Multi-provider LLM support added | Phase 1 Completed*
+*agentic-rag-platform | Version 1.2 | Multi-provider LLM support added | All 8 Phases Completed*
