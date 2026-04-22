@@ -40,6 +40,7 @@ Router → Retriever → DocGrader → Generator → HallucinationGrader → Ans
 | Tracing | LangSmith |
 | Metrics | Prometheus + Grafana |
 | Logging | structlog (JSON) |
+| Frontend | Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/ui + TanStack Query |
 
 ---
 
@@ -86,7 +87,7 @@ Required in production for large document uploads. In dev, ingestion runs synchr
 arq vectorstore.ingestion_worker.WorkerSettings
 ```
 
-### 5. (Optional) Full stack with Prometheus + Grafana
+### 5. (Optional) Full stack with Prometheus + Grafana + Frontend
 
 ```bash
 docker-compose up --build
@@ -95,8 +96,18 @@ docker-compose up --build
 | Service | URL |
 |---|---|
 | Platform API | http://localhost:8000 |
+| Frontend UI | http://localhost:3001 |
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000 (admin/admin) |
+
+### 6. (Optional) Frontend dev server only
+
+```bash
+cd frontend
+cp .env.example .env.local   # set NEXT_PUBLIC_API_URL if API is not on :8000
+npm install
+npm run dev                  # http://localhost:3001
+```
 
 ---
 
@@ -368,6 +379,21 @@ All thresholds live in `config/constants.py` — change them there, not inline:
 
 ---
 
+## Frontend (Phase 9)
+
+A self-serve tenant UI is available at `http://localhost:3001` when running via docker-compose or the frontend dev server.
+
+**Flows:**
+- **Login** — paste `tenant_id` + `api_key`; credentials stored in `sessionStorage`, cleared on tab close or logout
+- **Documents** — drag-and-drop PDF upload with real-time polling (`processing → active`), document list with status badges, and one-click deletion
+- **Query** — chat-style UI with answer confidence badge, citation cards (filename + page + preview), and thumbs-up/down feedback wired to LangSmith traces
+- **Settings** — tenant info readout, key-rotation help text, logout
+
+**Security notes:**
+- API key lives in `sessionStorage` — XSS-risky but acceptable for an internal Dell tool at MVP stage; HttpOnly session cookies are the recommended follow-up
+- Strict CSP headers set in `next.config.ts`; `X-API-Key` is never logged
+- On `401`, the auth provider wipes credentials and redirects to `/login`
+
 ## Project Structure
 
 ```
@@ -382,12 +408,31 @@ agentic-rag-platform/
 ├── prompts/                # All prompt templates (centralized)
 ├── cache/                  # Redis semantic cache
 ├── config/                 # Settings (Pydantic BaseSettings) + constants
-├── docker/                 # Grafana dashboards
+├── docker/                 # Grafana dashboards + Prometheus config
+├── frontend/               # Next.js 14 tenant UI (Phase 9)
 ├── tests/                  # Unit, integration, security, eval
+├── docker-compose.yml
+├── Dockerfile.api
 ├── .env.example
 └── requirements.txt
 ```
 
 ---
+
+---
+
+## Implementation Phases
+
+| Phase | Deliverable | Status |
+|---|---|---|
+| 1 | Core graph + LLM + prompts + vectorstore | ✅ Done |
+| 2 | Query REST API + schemas | ✅ Done |
+| 3 | Multi-tenant foundation + quotas + key rotation | ✅ Done |
+| 4 | Per-tenant doc management + async ingestion | ✅ Done |
+| 5 | Guardrails (input + output + indirect injection) | ✅ Done |
+| 6 | Tracing + structured logs | ✅ Done |
+| 7 | Metrics + dashboards + semantic cache | ✅ Done |
+| 8 | Full test suite + security tests | ✅ Done |
+| 9 | Frontend — Next.js tenant UI + CORS middleware | ✅ Done |
 
 *Chandiramouli Ravisankar — April 2026*

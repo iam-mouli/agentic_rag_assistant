@@ -1,11 +1,12 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Response
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.middleware.rate_limiter import RateLimiterMiddleware
 from app.middleware.tenant_resolver import TenantResolverMiddleware
-from app.routes import docs, health, query, tenants
+from app.routes import docs, feedback, health, query, tenants
 from config.settings import settings
 from observability.logging.structured_logger import configure_logging, get_logger
 
@@ -54,6 +55,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS — allow the Next.js frontend (dev: 3001, prod: configurable via env)
+_frontend_origins = [o.strip() for o in settings.FRONTEND_ORIGINS.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_frontend_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-PII-Stripped", "X-Quota-Exceeded", "Retry-After", "X-Run-ID"],
+)
+
 # Middleware runs in reverse-add order: TenantResolver (added last) runs first,
 # then RateLimiter reads request.state.tenant set by TenantResolver.
 app.add_middleware(RateLimiterMiddleware)
@@ -63,6 +75,7 @@ app.include_router(health.router)
 app.include_router(query.router)
 app.include_router(tenants.router)
 app.include_router(docs.router)
+app.include_router(feedback.router)
 
 
 @app.get("/metrics", include_in_schema=False)

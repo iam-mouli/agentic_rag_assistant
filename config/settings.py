@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     PLATFORM_ADMIN_KEY: str = "change-me"
     ENVIRONMENT: str = "development"
 
+    # --- Frontend CORS (comma-separated origins) ---
+    FRONTEND_ORIGINS: str = "http://localhost:3001"
+
     class Config:
         env_file = ".env"
 
