@@ -2,7 +2,6 @@
 
 A **multi-tenant, self-serve Enterprise Knowledge Base Platform** built on LangGraph. Any product team can onboard their documentation and get a self-correcting AI knowledge assistant — with zero platform-team dependency.
 
-**Origin:** First deployed as the OME (OpenManage Enterprise) knowledge assistant — 80% reduction in new-engineer onboarding queries, adopted by 7 teams, 500+ documents indexed. This platform generalises that to any product line.
 
 ---
 
