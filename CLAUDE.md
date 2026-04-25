@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A multi-tenant Enterprise Knowledge Base Platform enabling any product team to onboard documentation and get an AI knowledge assistant with zero platform-team dependency. The authoritative spec is `agentic-rag-platform-design.md` (v1.3).
+A multi-tenant Enterprise Knowledge Base Platform enabling any product team to onboard documentation and get an AI knowledge assistant with zero platform-team dependency. The authoritative spec is `agentic-rag-platform-design.md` (v1.4).
 
 **Target state:** Agentic multi-tenant platform using LangGraph, self-serve tenant onboarding, hallucination grading, and full observability.
 
@@ -13,8 +13,8 @@ A multi-tenant Enterprise Knowledge Base Platform enabling any product team to o
 | Layer | Technology |
 |-------|-----------|
 | Agent Framework | LangGraph |
-| LLMs | OpenAI / Anthropic / Gemini — configurable via `LLM_PROVIDER` |
-| Embeddings | OpenAI / Gemini — configurable via `EMBEDDING_PROVIDER` |
+| LLMs | OpenAI / Anthropic / Gemini / Ollama — configurable via `LLM_PROVIDER` |
+| Embeddings | OpenAI / Gemini / Ollama — configurable via `EMBEDDING_PROVIDER` |
 | Vector Store | FAISS (per-tenant, isolated) |
 | API | FastAPI + Pydantic |
 | Task Queue | arq (Redis-backed async ingestion) |
@@ -74,7 +74,9 @@ Provider-agnostic factory with lazy init. Switch provider via env var — no cod
 - `LLM_PROVIDER=openai` → gpt-4o (generation) + gpt-4o-mini (grading)
 - `LLM_PROVIDER=anthropic` → claude-sonnet-4-6 (generation) + claude-haiku-4-5-20251001 (grading)
 - `LLM_PROVIDER=gemini` → gemini-2.0-flash (generation) + gemini-2.0-flash-lite (grading)
-- `EMBEDDING_PROVIDER` → `openai` or `gemini` (Anthropic has no embedding model)
+- `LLM_PROVIDER=ollama` → configurable via `OLLAMA_GENERATION_MODEL` + `OLLAMA_GRADER_MODEL` (local inference, no API key)
+- `EMBEDDING_PROVIDER` → `openai`, `gemini`, or `ollama` (Anthropic has no embedding model)
+- **FAISS dimension lock-in:** switching `EMBEDDING_PROVIDER` after docs are indexed breaks the existing index. Re-embed all chunks before ingesting new docs with a different provider.
 
 ### Key Thresholds (`config/constants.py`)
 
@@ -122,6 +124,9 @@ GET  /{tenant_id}/docs/{doc_id}      # Get doc metadata
 DELETE /{tenant_id}/docs/{doc_id}    # Remove doc
 PUT  /{tenant_id}/docs/{doc_id}      # Replace doc (new version)
 POST /{tenant_id}/feedback           # Thumbs-up/down wired to LangSmith run_id
+GET  /{tenant_id}/logs/app           # Structured app logs (level filter, limit, offset)
+GET  /{tenant_id}/logs/traces        # LangSmith traces proxied server-side (API key hidden)
+GET  /{tenant_id}/logs/ingestion     # Doc registry ingestion job history (status filter)
 GET  /health, /health/{tenant_id}    # Status
 GET  /metrics                        # Prometheus scrape
 ```
@@ -147,6 +152,7 @@ All settings go through `config/settings.py` (Pydantic `BaseSettings`). All nume
 | 7 | **Completed** | Metrics + dashboards + semantic cache |
 | 8 | **Completed** | Full test suite + security tests |
 | 9 | **Completed** | Next.js tenant frontend + CORS middleware + feedback endpoint + docker-compose |
+| 10 | **Completed** | Ollama provider support + logs API + rotating file handler + frontend logs UI |
 
 Do not skip ahead — each phase depends on the previous. The design doc is the source of truth for implementation details.
 
@@ -250,7 +256,7 @@ Do not skip ahead — each phase depends on the previous. The design doc is the 
 **Non-obvious decisions:**
 - Input pipeline order: length → injection → PII → topic. Cheapest checks first to minimise unnecessary regex work. Short-circuits on first failure — the first blocked check's `block_code` is returned.
 - `topic_checker` is **permissive by design**: it only blocks queries that are unambiguously unrelated to enterprise tech. False-negative (off-topic query passes) is far less harmful than false-positive (legitimate enterprise query blocked).
-- `hallucination_gate` skips when `result["fallback"] is True`. Fallback answers are intentionally not document-grounded; applying the hallucination gate to them would always block them.
+- `hallucination_gate` skips when `result["fallback"] is True` **or** `result["route_decision"] == "direct_answer"`. Both paths bypass the retriever so `hallucination_score` is never set; applying the gate would always block them.
 - `citation_enforcer` checks `route_decision == "direct_answer"` OR `fallback == True` to skip. Both legitimate paths produce citations-free answers.
 - `classify_chunk` returning `False` does **not** fail the ingestion job — it logs and skips the chunk. Quarantining a few adversarial chunks should not prevent an entire doc from being indexed.
 - `confidence_level` thresholds: high ≥ 0.85, medium ≥ `ANSWER_SCORE_THRESHOLD` (0.70), low otherwise. These differ from `ANSWER_SCORE_THRESHOLD` intentionally — the score threshold gates the *graph's* self-correction loop, while the confidence label is a *client-facing* signal.
@@ -262,7 +268,7 @@ Do not skip ahead — each phase depends on the previous. The design doc is the 
 
 **What was built:**
 - `observability/logging/structured_logger.py` — `configure_logging()` sets up structlog JSON renderer with `merge_contextvars`, ISO timestamps, exc_info formatting; `get_logger(name)` factory used by all modules
-- `observability/langsmith/tracer.py` — `trace_graph_run(tenant_id, query)` async context manager: opens a LangSmith run on entry, annotates it with `tenant_id`, `route_decision`, `rewrite_count`, `hallucination_score`, `answer_score`, `fallback` on exit; `populate_carrier(carrier, result)` copies graph output into the carrier; `get_run_id(carrier)` returns the UUID for the response header
+- `observability/langsmith/tracer.py` — `trace_graph_run(tenant_id, query)` **async** context manager (`@asynccontextmanager`): opens a LangSmith run on entry, annotates it with `tenant_id`, `route_decision`, `rewrite_count`, `hallucination_score`, `answer_score`, `fallback` on exit; `populate_carrier(carrier, result)` copies graph output into the carrier; `get_run_id(carrier)` returns the UUID for the response header
 - `observability/graph_tracing.py` — `traced_node(name, fn)` wraps any node callable to emit `graph_node_enter` / `graph_node_exit` / `graph_node_error` with `latency_ms`
 - `graph/builder.py` — all `add_node()` calls wrapped with `traced_node()`
 - `app/main.py` — `configure_logging()` called at module load; `get_logger()` replaces any bare logging
@@ -270,7 +276,7 @@ Do not skip ahead — each phase depends on the previous. The design doc is the 
 - `vectorstore/ingestion_worker.py` — stdlib `logger = logging.getLogger()` replaced with `get_logger()`; emits `doc_ingested` (chunk_count, quarantined_count, pages), `chunk_quarantined` (chunk_index), `ingestion_failed` (error) events
 
 **Non-obvious decisions:**
-- LangSmith is **fully opt-in**: `trace_graph_run` is a no-op context manager when `LANGSMITH_API_KEY` is absent or `langsmith` is not installed. Call-sites need no conditional logic — the carrier dict is always yielded.
+- LangSmith is **fully opt-in**: `trace_graph_run` is a no-op **async** context manager when `LANGSMITH_API_KEY` is absent or `langsmith` is not installed. Call-sites need no conditional logic — the carrier dict is always yielded. Use `async with trace_graph_run(...)` — not `with`.
 - Guardrail block logs in `query.py` are emitted **before** raising `HTTPException` — they always fire even if the exception path short-circuits LangSmith. This satisfies the security-relevance requirement.
 - `structlog.contextvars.bind_contextvars(request_id=..., tenant_id=...)` is called at the top of each query handler after `clear_contextvars()`. All subsequent log calls within that request (including deep inside nodes) automatically inherit those fields without being passed explicitly.
 - `traced_node` is a plain synchronous wrapper. LangGraph's thread-pool executor handles sync node dispatch — the wrapper does not need to be async.
@@ -380,3 +386,44 @@ Frontend (`frontend/`):
 - `sessionStorage` vs `localStorage`: sessionStorage clears on tab close, reducing the XSS blast radius window. Acceptable for internal MVP; the migration path to HttpOnly cookies is clean (swap `lib/auth.ts` and add a `/session` endpoint).
 - The `(app)` route group uses parenthesis-folder syntax (Next.js App Router convention). The folder name is excluded from the URL — `/docs` not `/(app)/docs`. The group's `layout.tsx` wraps all protected pages with `<ProtectedRoute>`.
 - `X-API-Key` is never logged anywhere in the frontend. The `api-client.ts` error handler reads the response body JSON for `detail`, not the request headers.
+- `next.config.ts` was replaced by `next.config.mjs`. The `.mjs` extension is required because the file uses ES module syntax (`export default`) and the project's `package.json` does not set `"type": "module"`.
+
+---
+
+### Phase 10 — Ollama Support + Logs API + File Handler + Frontend Logs UI
+**Commit:** `ee76d98`
+
+**What was built:**
+
+Backend:
+- `llm/client.py` — Ollama provider added: `ChatOllama` (generation/grading) + `OllamaEmbeddings` (embeddings) via `langchain-ollama`. Configured via `OLLAMA_BASE_URL`, `OLLAMA_GENERATION_MODEL`, `OLLAMA_GRADER_MODEL`, `OLLAMA_EMBEDDING_MODEL`.
+- `config/settings.py` — 4 new Ollama fields (`OLLAMA_BASE_URL`, `OLLAMA_GENERATION_MODEL`, `OLLAMA_GRADER_MODEL`, `OLLAMA_EMBEDDING_MODEL`). Comments updated on `LLM_PROVIDER` / `EMBEDDING_PROVIDER` to reflect the new option.
+- `requirements.txt` — `langchain-ollama>=0.2.0` added.
+- `observability/logging/file_handler.py` — `file_log_processor` structlog processor: appends every log entry to `storage/logs/app.jsonl`; rotates to `app.jsonl.1` at 5 MB. `read_logs(tenant_id, level, limit, offset)` reads both files newest-first with optional filters. Never raises — errors are silently suppressed.
+- `observability/logging/structured_logger.py` — `file_log_processor` inserted into the structlog chain before `JSONRenderer`. `add_logger_name` processor removed (redundant with structured fields).
+- `observability/langsmith/tracer.py` — `trace_graph_run` converted from `@contextmanager` to `@asynccontextmanager`. Required because call-sites are `async` route handlers; a sync context manager would block the event loop during LangSmith I/O.
+- `app/routes/logs.py` — 3 new endpoints: `GET /{tenant_id}/logs/app`, `GET /{tenant_id}/logs/traces`, `GET /{tenant_id}/logs/ingestion`. LangSmith traces are proxied server-side — the API key is never sent to the browser.
+- `app/main.py` — `logs.router` registered.
+- `app/middleware/tenant_resolver.py` — `OPTIONS` requests pass through before auth check. Required for CORS preflight — without this, `OPTIONS /tenant/query` would return 401 before `CORSMiddleware` could add the headers.
+- `guardrails/output/hallucination_gate.py` — gate now also skips when `route_decision == "direct_answer"`. The hallucination grader node is not run on the direct-answer path, so `hallucination_score` stays at its default `0.0`, which would always trip the gate.
+- `vectorstore/store.py` — early return in `add_chunks` when `embeddings` is empty. Prevents creating a zero-vector FAISS index that can't be extended later.
+- `vectorstore/loader.py` — import updated from deprecated `langchain.text_splitter` to `langchain_text_splitters`.
+
+Frontend:
+- `frontend/app/(app)/logs/page.tsx` — logs page with three tabs (App Logs, Traces, Ingestion).
+- `frontend/components/logs/app-logs-tab.tsx` — renders structlog entries; level filter dropdown; click to expand full JSON.
+- `frontend/components/logs/traces-tab.tsx` — renders LangSmith runs; collapsible detail row with scores and latency.
+- `frontend/components/logs/ingestion-tab.tsx` — renders doc registry jobs; status filter; error message expand.
+- `frontend/components/ui/tabs.tsx` — lightweight tab primitive (no Radix dependency).
+- `frontend/lib/hooks/use-logs.ts` — `useAppLogs`, `useTraces`, `useIngestionLogs` TanStack Query hooks.
+- `frontend/components/nav/app-nav.tsx` — Logs nav link added.
+- `frontend/lib/types.ts` — `AppLogEntry`, `TraceRun`, `IngestionJob` TypeScript interfaces added.
+- `frontend/next.config.mjs` — replaces `next.config.ts` (ES module syntax requires `.mjs` extension).
+
+**Non-obvious decisions:**
+- `file_log_processor` is inserted **before** `JSONRenderer` in the structlog chain. Each processor receives the `event_dict` and must return it — `file_log_processor` writes the entry and passes it through unchanged so `JSONRenderer` still serialises it for stdout.
+- `trace_graph_run` must be `asynccontextmanager` because it `await`s LangSmith client calls. Using the sync `contextmanager` would deadlock the async event loop when the LangSmith HTTP request fires.
+- Logs endpoints do not require a separate auth layer — they inherit `X-Tenant-ID` + `X-API-Key` from `TenantResolverMiddleware`. The `read_logs` filter by `tenant_id` is the isolation boundary; all log entries already carry `tenant_id` from `structlog.contextvars`.
+- `GET /{tenant_id}/logs/traces` over-fetches (`limit * 5`) from LangSmith and filters in Python. LangSmith's filter DSL is awkward for metadata sub-key queries; Python filtering is simpler and the total run count per project is small.
+- **Embedding provider switch breaks existing FAISS index.** The index dimension is fixed at creation time. Switching `EMBEDDING_PROVIDER` (e.g., Gemini 3072-dim → Ollama 768-dim) requires re-embedding all existing chunks. Script: load `metadata.pkl`, call `embed_texts` on all stored `text` fields, rebuild `IndexFlatL2`, write back both files, then retry ingestion.
+- `OPTIONS` pass-through in `TenantResolverMiddleware` must come **after** the public-path check but **before** the tenant lookup. If it ran after the tenant lookup the resolver would reject it with 401 before `CORSMiddleware` could intercept.

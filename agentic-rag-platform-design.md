@@ -3,7 +3,7 @@
 **Version:** 1.4  
 **Author:** Chandiramouli Ravisankar  
 **Date:** April 2026  
-**Status:** Architecture Approved | All 9 Phases Completed
+**Status:** Architecture Approved | All 10 Phases Completed
 
 ---
 
@@ -135,11 +135,11 @@ Platform is now being architected to scale this across all product lines.
 | Layer | Technology | Purpose |
 |---|---|---|
 | Agent Framework | LangGraph | Stateful multi-node graph execution |
-| Generation LLM | OpenAI `gpt-4o` / Anthropic `claude-sonnet-4-6` / Gemini `gemini-2.0-flash` — selected via `LLM_PROVIDER` | Answer generation |
-| Grader LLM | OpenAI `gpt-4o-mini` / Anthropic `claude-haiku-4-5-20251001` / Gemini `gemini-2.0-flash-lite` — selected via `LLM_PROVIDER` | Router + all 4 grader nodes — ~5× cheaper than generation model |
+| Generation LLM | OpenAI `gpt-4o` / Anthropic `claude-sonnet-4-6` / Gemini `gemini-2.0-flash` / Ollama (configurable) — selected via `LLM_PROVIDER` | Answer generation |
+| Grader LLM | OpenAI `gpt-4o-mini` / Anthropic `claude-haiku-4-5-20251001` / Gemini `gemini-2.0-flash-lite` / Ollama (configurable) — selected via `LLM_PROVIDER` | Router + all 4 grader nodes — ~5× cheaper than generation model |
 | RAG Framework | LangChain | Document loading, prompt chaining |
 | Vector Store | FAISS | Per-tenant similarity search |
-| Embeddings | OpenAI `text-embedding-3-small` (default; `3-large` for high-accuracy tenants) | Chunk + query vectorization |
+| Embeddings | OpenAI `text-embedding-3-small` / Gemini `gemini-embedding-001` / Ollama `nomic-embed-text` — selected via `EMBEDDING_PROVIDER` | Chunk + query vectorization |
 | API Framework | FastAPI | REST API exposure |
 | Task Queue | `arq` (Redis-backed) | Async document ingestion worker |
 | Cache | Redis | Semantic query cache + rate-limit counters + token budget counters |
@@ -1082,8 +1082,8 @@ agentic-rag-platform/
 ```python
 class Settings(BaseSettings):
     # Provider selection
-    LLM_PROVIDER:       str = "openai"   # openai | anthropic | gemini
-    EMBEDDING_PROVIDER: str = "openai"   # openai | gemini  (Anthropic has no embedding model)
+    LLM_PROVIDER:       str = "openai"   # openai | anthropic | gemini | ollama
+    EMBEDDING_PROVIDER: str = "openai"   # openai | gemini | ollama  (Anthropic has no embedding model)
 
     # OpenAI
     OPENAI_API_KEY:           str = ""
@@ -1260,8 +1260,7 @@ services:
 | 7 | `observability/prometheus/`, `docker/grafana/`, `cache/semantic_cache.py` | Tenant-labeled metrics + dashboards + semantic cache | Completed |
 | 8 | `tests/` (unit + integration + security + eval) | Full coverage — 23 test files, ~164 tests, CI-gated LangSmith evals | Completed |
 | 9 | `frontend/` + CORS middleware in `app/main.py` + `app/routes/feedback.py` + `docker-compose.yml` | Next.js tenant UI: login, docs CRUD, query/response with citations, thumbs-up/down feedback | Completed |
-| 9.1 | `guardrails/output/hallucination_gate.py` | Bug fix: direct-answer routes now bypass the hallucination gate (score stays 0.0 when `hallucination_grader_node` is skipped) — same exception already applied to fallback answers | Completed |
-| 9.2 | `observability/logging/file_handler.py`, `app/routes/logs.py`, `frontend/components/logs/`, `frontend/app/(app)/logs/` | Three-tab in-app log viewer: Application Logs (structlog JSONL, tenant-scoped, level filter), LangSmith Traces (server-side proxy, full run detail inline), Ingestion Jobs (doc registry with error_message expand) | Completed |
+| 10 | `llm/client.py`, `config/settings.py`, `observability/logging/file_handler.py`, `app/routes/logs.py`, `frontend/components/logs/`, `frontend/app/(app)/logs/`, `guardrails/output/hallucination_gate.py`, `app/middleware/tenant_resolver.py` | Ollama local-inference provider (LLM + embeddings); rotating JSONL log file handler; three-tab in-app log viewer (App Logs, LangSmith Traces, Ingestion Jobs); hallucination gate bug fix for direct-answer path; CORS OPTIONS pass-through fix | Completed |
 
 ---
 
@@ -1285,8 +1284,8 @@ services:
 | Doc Registry | SQLite (dev) / PostgreSQL (prod) | Lightweight dev, upgradeable for prod |
 | Tenant Isolation | Separate FAISS + registry per tenant | True data isolation, no cross-contamination |
 | Chunking metadata | doc_id + tenant_id on every chunk | Enables surgical doc removal without full re-index |
-| Multi-provider LLM | `LLM_PROVIDER` env flag (`openai` / `anthropic` / `gemini`) | Teams may have existing enterprise agreements with different providers; isolated to `llm/client.py` — no node-level changes required |
-| Multi-provider Embeddings | `EMBEDDING_PROVIDER` env flag (`openai` / `gemini`) | Anthropic excluded — no embedding model available; decoupled from LLM provider choice |
+| Multi-provider LLM | `LLM_PROVIDER` env flag (`openai` / `anthropic` / `gemini` / `ollama`) | Teams may have existing enterprise agreements with different providers; isolated to `llm/client.py` — no node-level changes required |
+| Multi-provider Embeddings | `EMBEDDING_PROVIDER` env flag (`openai` / `gemini` / `ollama`) | Anthropic excluded — no embedding model available; decoupled from LLM provider choice. **Warning:** switching providers after docs are indexed requires re-embedding all existing chunks (FAISS index dimension is fixed at creation). |
 | Project Name | agentic-rag-platform | Signals platform thinking vs. point solution |
 | Prompt templates | Centralized in `prompts/` | Tunable without touching node logic |
 | Thresholds | Centralized in `config/constants.py` | Behavior change without code change |
@@ -1296,4 +1295,4 @@ services:
 ---
 
 *Document prepared by Chandiramouli Ravisankar | April 2026*  
-*agentic-rag-platform | Version 1.4 | Phase 9.1–9.2: hallucination gate bug fix + in-app log viewer | All 9 Phases Completed*
+*agentic-rag-platform | Version 1.4 | Phase 10: Ollama support + logs API + file handler + frontend logs UI | All 10 Phases Completed*
