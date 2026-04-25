@@ -26,8 +26,11 @@ def _make_chat_model(model_name: str) -> BaseChatModel:
     if provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(model=model_name, google_api_key=settings.GOOGLE_API_KEY)
+    if provider == "ollama":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(model=model_name, base_url=settings.OLLAMA_BASE_URL)
     raise ValueError(
-        f"Unsupported LLM_PROVIDER: {settings.LLM_PROVIDER!r}. Choose: openai | anthropic | gemini"
+        f"Unsupported LLM_PROVIDER: {settings.LLM_PROVIDER!r}. Choose: openai | anthropic | gemini | ollama"
     )
 
 
@@ -36,6 +39,7 @@ def _generation_model_name() -> str:
         "openai": settings.OPENAI_GENERATION_MODEL,
         "anthropic": settings.ANTHROPIC_GENERATION_MODEL,
         "gemini": settings.GOOGLE_GENERATION_MODEL,
+        "ollama": settings.OLLAMA_GENERATION_MODEL,
     }[settings.LLM_PROVIDER.lower()]
 
 
@@ -44,6 +48,7 @@ def _grader_model_name() -> str:
         "openai": settings.OPENAI_GRADER_MODEL,
         "anthropic": settings.ANTHROPIC_GRADER_MODEL,
         "gemini": settings.GOOGLE_GRADER_MODEL,
+        "ollama": settings.OLLAMA_GRADER_MODEL,
     }[settings.LLM_PROVIDER.lower()]
 
 
@@ -77,10 +82,16 @@ def _get_embedder():
                 model=settings.GOOGLE_EMBEDDING_MODEL,
                 google_api_key=settings.GOOGLE_API_KEY,
             )
+        elif provider == "ollama":
+            from langchain_ollama import OllamaEmbeddings
+            _embedder = OllamaEmbeddings(
+                model=settings.OLLAMA_EMBEDDING_MODEL,
+                base_url=settings.OLLAMA_BASE_URL,
+            )
         else:
             raise ValueError(
                 f"Unsupported EMBEDDING_PROVIDER: {settings.EMBEDDING_PROVIDER!r}. "
-                "Choose: openai | gemini  (Anthropic has no embedding model)"
+                "Choose: openai | gemini | ollama  (Anthropic has no embedding model)"
             )
     return _embedder
 

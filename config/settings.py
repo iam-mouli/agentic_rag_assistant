@@ -3,8 +3,8 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # --- Provider selection ---
-    LLM_PROVIDER: str = "openai"        # openai | anthropic | gemini
-    EMBEDDING_PROVIDER: str = "openai"  # openai | gemini  (Anthropic has no embedding model)
+    LLM_PROVIDER: str = "openai"        # openai | anthropic | gemini | ollama
+    EMBEDDING_PROVIDER: str = "openai"  # openai | gemini | ollama  (Anthropic has no embedding model)
 
     # --- OpenAI ---
     OPENAI_API_KEY: str = ""
@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_GENERATION_MODEL: str = "claude-sonnet-4-6"
     ANTHROPIC_GRADER_MODEL: str = "claude-haiku-4-5-20251001"
+
+    # --- Ollama (local) ---
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_GENERATION_MODEL: str = "gemma4:e2b"
+    OLLAMA_GRADER_MODEL: str = "gemma4:e2b"
+    OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
 
     # --- Google Gemini ---
     GOOGLE_API_KEY: str = ""

@@ -1,8 +1,8 @@
 """LangSmith run tracking for graph invocations. Opt-in via LANGSMITH_API_KEY."""
 import os
 import uuid
-from contextlib import contextmanager
-from typing import Generator, Optional
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator, Optional
 
 from config.settings import settings
 from observability.logging.structured_logger import get_logger
@@ -22,11 +22,11 @@ def _ensure_env() -> None:
         os.environ.setdefault("LANGCHAIN_PROJECT", settings.LANGSMITH_PROJECT)
 
 
-@contextmanager
-def trace_graph_run(
+@asynccontextmanager
+async def trace_graph_run(
     tenant_id: str,
     query: str,
-) -> Generator[dict, None, None]:
+) -> AsyncGenerator[dict, None]:
     """Context manager that opens a LangSmith run and yields a metadata carrier.
 
     The caller stores graph result metadata into the carrier dict; the manager

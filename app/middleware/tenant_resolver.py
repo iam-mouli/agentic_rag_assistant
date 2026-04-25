@@ -21,7 +21,7 @@ class TenantResolverMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        if _is_public(path):
+        if _is_public(path) or request.method == "OPTIONS":
             return await call_next(request)
 
         # Admin routes — protected by platform admin key

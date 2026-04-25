@@ -48,3 +48,53 @@ export interface Credentials {
   tenantId: string;
   apiKey: string;
 }
+
+// ---- Logs ----
+
+export interface AppLogEntry {
+  timestamp?: string;
+  level?: string;
+  event?: string;
+  tenant_id?: string;
+  request_id?: string;
+  [key: string]: unknown;
+}
+
+export interface AppLogsResponse {
+  entries: AppLogEntry[];
+  count: number;
+}
+
+export interface TraceRun {
+  run_id: string;
+  start_time: string | null;
+  end_time: string | null;
+  latency_ms: number | null;
+  status: string | null;
+  inputs: Record<string, unknown>;
+  outputs: Record<string, unknown>;
+  error: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface TracesResponse {
+  runs: TraceRun[];
+  langsmith_enabled: boolean;
+  error?: string;
+}
+
+export interface IngestionJob {
+  doc_id: string;
+  filename: string;
+  status: string;
+  uploaded_at: string | null;
+  chunk_count: number | null;
+  pages: number | null;
+  error_message: string | null;
+}
+
+export interface IngestionLogsResponse {
+  jobs: IngestionJob[];
+  count: number;
+  error?: string;
+}

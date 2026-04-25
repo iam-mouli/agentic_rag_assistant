@@ -35,6 +35,9 @@ def _save(tenant_id: str, index: faiss.Index, metadata: list[dict]) -> None:
 
 
 def add_chunks(tenant_id: str, chunks: list[Document], embeddings: list[list[float]]) -> None:
+    if not embeddings:
+        return
+
     index, metadata = _load(tenant_id)
 
     vectors = np.array(embeddings, dtype=np.float32)

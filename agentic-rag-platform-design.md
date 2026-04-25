@@ -1,6 +1,6 @@
 # agentic-rag-platform — System Design Document
 
-**Version:** 1.3  
+**Version:** 1.4  
 **Author:** Chandiramouli Ravisankar  
 **Date:** April 2026  
 **Status:** Architecture Approved | All 9 Phases Completed
@@ -660,6 +660,8 @@ Every node emits a JSON log entry via `structlog`:
 }
 ```
 
+**Persistent log file (`observability/logging/file_handler.py`):** A `file_log_processor` is inserted into the structlog chain (before `JSONRenderer`) and appends every log entry to `storage/logs/app.jsonl`. When the file exceeds 5 MB it is rotated to `app.jsonl.1` and a fresh `app.jsonl` is started. Both files are read together when querying logs via the API. This processor never raises — log write failures are silently suppressed so they cannot affect the request path.
+
 ### 9.5 Feedback Collection
 
 ```
@@ -729,6 +731,16 @@ Response 200:
 | GET | `/health` | Platform liveness — returns status of master DB, OpenAI, LangSmith, Redis, and count of tenant indices currently loaded |
 | GET | `/health/{tenant_id}` | Per-tenant — returns FAISS load status, doc count, ingestion queue depth, last-successful-query timestamp |
 | GET | `/metrics` | Prometheus metrics scrape endpoint |
+
+### 10.5 Logs Endpoints
+
+Scoped per-tenant — all three require the standard `X-Tenant-ID` + `X-API-Key` headers and return only entries for that tenant.
+
+| Method | Endpoint | Query Params | Description |
+|---|---|---|---|
+| GET | `/{tenant}/logs/app` | `level`, `limit` (≤500), `offset` | Structured application logs from `storage/logs/app.jsonl`, newest-first. Filter by log level (`info`, `warning`, `error`). |
+| GET | `/{tenant}/logs/traces` | `limit` (≤100) | Recent LangSmith trace runs for the tenant, proxied server-side (API key never exposed to frontend). Returns inputs, outputs, scores, latency, and error per run. |
+| GET | `/{tenant}/logs/ingestion` | `status`, `limit` (≤200) | Ingestion job history from the doc registry. Includes `error_message` for failed/quarantined docs. Filter by status (`processing`, `active`, `failed`, `quarantined`). |
 
 Example `/health` response:
 
@@ -872,7 +884,8 @@ agentic-rag-platform/
 │   │   ├── docs.py                              # Doc CRUD per tenant
 │   │   ├── tenants.py                           # Tenant lifecycle management
 │   │   ├── feedback.py                          # POST /{tenant}/feedback
-│   │   └── health.py                            # GET /health, /health/{tenant_id}
+│   │   ├── health.py                            # GET /health, /health/{tenant_id}
+│   │   └── logs.py                              # GET /{tenant}/logs/app|traces|ingestion
 │   ├── schemas/
 │   │   ├── request.py                           # QueryRequest, FeedbackRequest,
 │   │   │                                        # DocUploadRequest, TenantRegisterRequest
@@ -918,7 +931,8 @@ agentic-rag-platform/
 │   │   ├── metrics.py                           # All metric definitions
 │   │   └── exporters.py                         # Node-level metric emitters
 │   └── logging/
-│       └── structured_logger.py                 # structlog JSON setup
+│       ├── structured_logger.py                 # structlog JSON setup + file processor wiring
+│       └── file_handler.py                      # Rotating JSONL file processor + reader
 │
 ├── tenants/                                     # Tenant Management Layer
 │   ├── manager.py                               # Tenant CRUD + storage provisioning
@@ -948,6 +962,9 @@ agentic-rag-platform/
 │   │   │   ├── faiss_index/
 │   │   │   └── registry.db
 │   │   └── {tenant_name}/                       # Auto-created on registration
+│   ├── logs/
+│   │   ├── app.jsonl                            # Active structured log file (≤5 MB)
+│   │   └── app.jsonl.1                          # Rotated previous log file
 │   └── tenants.db                               # Master tenant registry
 │
 ├── llm/
@@ -1005,6 +1022,51 @@ agentic-rag-platform/
 │       ├── dashboard_platform.json
 │       ├── dashboard_tenant.json
 │       └── datasource.yml
+│
+├── frontend/                                    # Next.js 14 Tenant UI (port 3001)
+│   ├── app/
+│   │   ├── (app)/
+│   │   │   ├── layout.tsx                       # Nav shell + ProtectedRoute wrapper
+│   │   │   ├── page.tsx                         # Dashboard
+│   │   │   ├── docs/page.tsx                    # Doc list + upload + delete
+│   │   │   ├── query/page.tsx                   # Chat Q&A
+│   │   │   ├── logs/page.tsx                    # Three-tab log viewer
+│   │   │   └── settings/page.tsx                # Tenant info + logout
+│   │   └── login/page.tsx
+│   ├── components/
+│   │   ├── auth/
+│   │   │   ├── auth-provider.tsx                # React context; reads/writes sessionStorage
+│   │   │   └── protected-route.tsx
+│   │   ├── docs/
+│   │   │   └── doc-upload.tsx                   # Drag-drop + progress + 3-s polling
+│   │   ├── query/
+│   │   │   ├── chat.tsx                         # Message history + input
+│   │   │   ├── message-bubble.tsx               # User/assistant bubble + confidence badge
+│   │   │   ├── citation-card.tsx                # {filename, page, chunk_preview}
+│   │   │   └── feedback-buttons.tsx             # Thumbs up/down → POST /{tenant}/feedback
+│   │   ├── logs/
+│   │   │   ├── app-logs-tab.tsx                 # structlog entries; level filter; click to expand
+│   │   │   ├── traces-tab.tsx                   # LangSmith runs; collapsible with scores
+│   │   │   └── ingestion-tab.tsx                # Doc registry jobs; status filter; error expand
+│   │   ├── nav/
+│   │   │   └── app-nav.tsx                      # Sticky header with Dashboard/Docs/Query/Logs/Settings
+│   │   └── ui/
+│   │       ├── badge.tsx
+│   │       ├── button.tsx
+│   │       ├── card.tsx
+│   │       ├── input.tsx
+│   │       ├── spinner.tsx
+│   │       └── tabs.tsx                         # Lightweight tab primitive (no Radix dep)
+│   └── lib/
+│       ├── api-client.ts                        # fetch wrapper: injects headers; handles 401/429/5xx
+│       ├── auth.ts                              # sessionStorage credential helpers
+│       ├── types.ts                             # TS interfaces mirroring response schemas
+│       ├── utils.ts
+│       └── hooks/
+│           ├── use-docs.ts
+│           ├── use-poll-doc.ts
+│           ├── use-query-agent.ts
+│           └── use-logs.ts                      # useAppLogs / useTraces / useIngestionLogs
 │
 ├── .env.example
 ├── requirements.txt
@@ -1198,6 +1260,8 @@ services:
 | 7 | `observability/prometheus/`, `docker/grafana/`, `cache/semantic_cache.py` | Tenant-labeled metrics + dashboards + semantic cache | Completed |
 | 8 | `tests/` (unit + integration + security + eval) | Full coverage — 23 test files, ~164 tests, CI-gated LangSmith evals | Completed |
 | 9 | `frontend/` + CORS middleware in `app/main.py` + `app/routes/feedback.py` + `docker-compose.yml` | Next.js tenant UI: login, docs CRUD, query/response with citations, thumbs-up/down feedback | Completed |
+| 9.1 | `guardrails/output/hallucination_gate.py` | Bug fix: direct-answer routes now bypass the hallucination gate (score stays 0.0 when `hallucination_grader_node` is skipped) — same exception already applied to fallback answers | Completed |
+| 9.2 | `observability/logging/file_handler.py`, `app/routes/logs.py`, `frontend/components/logs/`, `frontend/app/(app)/logs/` | Three-tab in-app log viewer: Application Logs (structlog JSONL, tenant-scoped, level filter), LangSmith Traces (server-side proxy, full run detail inline), Ingestion Jobs (doc registry with error_message expand) | Completed |
 
 ---
 
@@ -1232,4 +1296,4 @@ services:
 ---
 
 *Document prepared by Chandiramouli Ravisankar | April 2026*  
-*agentic-rag-platform | Version 1.3 | Phase 9: Next.js tenant frontend added | All 9 Phases Completed*
+*agentic-rag-platform | Version 1.4 | Phase 9.1–9.2: hallucination gate bug fix + in-app log viewer | All 9 Phases Completed*

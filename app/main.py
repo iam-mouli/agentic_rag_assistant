@@ -6,7 +6,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.middleware.rate_limiter import RateLimiterMiddleware
 from app.middleware.tenant_resolver import TenantResolverMiddleware
-from app.routes import docs, feedback, health, query, tenants
+from app.routes import docs, feedback, health, logs, query, tenants
 from config.settings import settings
 from observability.logging.structured_logger import configure_logging, get_logger
 
@@ -76,6 +76,7 @@ app.include_router(query.router)
 app.include_router(tenants.router)
 app.include_router(docs.router)
 app.include_router(feedback.router)
+app.include_router(logs.router)
 
 
 @app.get("/metrics", include_in_schema=False)

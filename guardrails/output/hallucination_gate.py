@@ -3,8 +3,8 @@ from guardrails.models import GuardrailResult
 
 
 def check_hallucination(result: dict) -> GuardrailResult:
-    # Fallback answers are not grounded in docs; gate doesn't apply.
-    if result.get("fallback"):
+    # Direct answers and fallbacks bypass retrieval, so no hallucination score is set.
+    if result.get("fallback") or result.get("route_decision") == "direct_answer":
         return GuardrailResult(passed=True)
 
     score = result.get("hallucination_score", 0.0)
