@@ -5,6 +5,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.history.store import init_history, save_query
 from app.schemas.request import QueryRequest
 from app.schemas.response import Citation, QueryResponse
 from graph.builder import rag_graph
@@ -166,5 +167,23 @@ async def query(tenant_id: str, request: QueryRequest, http_request: Request) ->
     await semantic_cache.set(request.query, tenant_id, response_dict, redis)
 
     run_id = get_run_id(carrier)
+
+    # Persist to query history (fail-open — never block the response)
+    try:
+        init_history(tenant_id)
+        save_query(
+            tenant_id=tenant_id,
+            query=request.query,
+            answer=response_body.answer,
+            citations=[c.model_dump() for c in response_body.citations],
+            confidence=response_body.confidence,
+            confidence_level=response_body.confidence_level,
+            fallback=response_body.fallback,
+            run_id=run_id,
+            cache_hit=False,
+        )
+    except Exception as exc:
+        logger.warning("history_save_failed", error=str(exc))
+
     headers = {"X-Run-ID": run_id} if run_id else {}
     return JSONResponse(content=response_dict, headers=headers)

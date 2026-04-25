@@ -49,6 +49,27 @@ export interface Credentials {
   apiKey: string;
 }
 
+// ---- Query History ----
+
+export interface QueryHistoryEntry {
+  query_id: string;
+  tenant_id: string;
+  query: string;
+  answer: string;
+  citations: Citation[];
+  confidence: number;
+  confidence_level: "high" | "medium" | "low";
+  fallback: boolean;
+  run_id: string | null;
+  cache_hit: boolean;
+  created_at: string;
+}
+
+export interface QueryHistoryResponse {
+  entries: QueryHistoryEntry[];
+  count: number;
+}
+
 // ---- Logs ----
 
 export interface AppLogEntry {
